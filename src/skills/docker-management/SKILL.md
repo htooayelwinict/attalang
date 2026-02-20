@@ -1,6 +1,6 @@
 ---
 name: docker-management
-description: Docker operations using direct tool calls.
+description: Docker operations using direct tool calls for containers, images, networks, volumes, compose, and system management.
 ---
 
 # Docker Tools Reference
@@ -27,6 +27,6 @@ docker_system_info, docker_system_prune, docker_version
 
 ## Usage Rules
 - Call tools directly - no routing or delegation needed.
-- For stop-all-containers: call list_containers once, then stop_container for each.
-- Ensure accessible means: container running with correct port mapping. Done.
+- For bulk ops (e.g. stop all): list once, then act on each result.
+- Ensure accessible means container is running with correct port mapping. Done.
 - Never spawn helper containers (curl/wget) to verify connectivity.
