@@ -1,23 +1,32 @@
 ---
 name: docker-management
-description: Route Docker tasks to appropriate subagents.
+description: Docker operations using direct tool calls.
 ---
 
-# Docker Routing
+# Docker Tools Reference
 
-Route tasks to subagents with the `task` tool:
+## Container Tools
+list_containers, run_container, start_container, stop_container, restart_container,
+remove_container, get_container_logs, get_container_stats, exec_in_container, inspect_container
 
-| Task Type | Subagent |
-|-----------|----------|
-| Containers (run, stop, logs, exec, inspect) | container-agent |
-| Images (pull, build, tag, prune) | image-agent |
-| Networks | network-agent |
-| Volumes | volume-agent |
-| Docker Compose | compose-agent |
-| System (info, prune, version) | system-agent |
+## Image Tools
+list_images, pull_image, build_image, tag_image, remove_image, inspect_image, prune_images
 
-## Examples
+## Network Tools
+list_networks, create_network, remove_network, connect_container_to_network,
+disconnect_container_from_network, inspect_network
 
-- `task("list all containers", "container-agent")`
-- `task("pull nginx:latest", "image-agent")`
-- `task("show docker version", "system-agent")`
+## Volume Tools
+list_volumes, create_volume, remove_volume, inspect_volume, prune_volumes
+
+## Compose Tools
+compose_up, compose_down, compose_ps, compose_logs
+
+## System Tools
+docker_system_info, docker_system_prune, docker_version
+
+## Usage Rules
+- Call tools directly - no routing or delegation needed.
+- For stop-all-containers: call list_containers once, then stop_container for each.
+- Ensure accessible means: container running with correct port mapping. Done.
+- Never spawn helper containers (curl/wget) to verify connectivity.
