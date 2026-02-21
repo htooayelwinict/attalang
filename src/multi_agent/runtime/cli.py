@@ -2,7 +2,7 @@ import uuid
 
 import click
 
-from src.multi_agent.agents import create_docker_agent
+from src.multi_agent.runtime import create_docker_graph_runtime
 
 
 @click.command()
@@ -16,11 +16,11 @@ def main(
     thread_id: str | None,
     prompt: str | None,
 ) -> None:
-    agent = create_docker_agent(model=model, temperature=temperature)
+    runtime = create_docker_graph_runtime(model=model, temperature=temperature)
     active_thread = thread_id or str(uuid.uuid4())
 
     if prompt:
-        click.echo(agent.invoke(prompt, thread_id=active_thread))
+        click.echo(runtime.run_turn(prompt, thread_id=active_thread))
         return
 
     click.echo("Docker agent ready. Type 'exit' or 'quit' to stop.")
@@ -34,7 +34,7 @@ def main(
         if user_input.strip().lower() in {"exit", "quit"}:
             break
 
-        response = agent.invoke(user_input, thread_id=active_thread)
+        response = runtime.run_turn(user_input, thread_id=active_thread)
         click.echo(response)
 
 
