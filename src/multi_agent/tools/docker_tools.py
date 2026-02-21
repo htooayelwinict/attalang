@@ -11,6 +11,10 @@ from pydantic import BaseModel, Field
 
 WORKSPACE_ENV_VAR = "MULTI_AGENT_DOCKER_WORKSPACE"
 WORKSPACE_DEFAULT = "/tmp/multi-agent-docker-workspace"
+MAX_TOOL_STRING_CHARS = int(os.getenv("DOCKER_TOOL_MAX_STRING_CHARS", "1200"))
+MAX_TOOL_LIST_ITEMS = int(os.getenv("DOCKER_TOOL_MAX_LIST_ITEMS", "120"))
+MAX_TOOL_DICT_ITEMS = int(os.getenv("DOCKER_TOOL_MAX_DICT_ITEMS", "200"))
+MAX_TOOL_RESPONSE_CHARS = int(os.getenv("DOCKER_TOOL_MAX_RESPONSE_CHARS", "4000"))
 
 
 def _workspace_root() -> Path:
@@ -34,8 +38,73 @@ def _resolve_workspace_path(path: str | None) -> Path:
     return resolved
 
 
+def _truncate_text(value: str, max_chars: int = MAX_TOOL_STRING_CHARS) -> str:
+    if len(value) <= max_chars:
+        return value
+    half = max_chars // 2
+    omitted = len(value) - max_chars
+    return (
+        f"{value[:half]}\n"
+        f"... [TRUNCATED {omitted} chars of logs] ...\n"
+        f"{value[-half:]}"
+    )
+
+
+def _truncate_data(
+    value: Any,
+    max_chars: int = MAX_TOOL_STRING_CHARS,
+    max_list_items: int = MAX_TOOL_LIST_ITEMS,
+    max_dict_items: int = MAX_TOOL_DICT_ITEMS,
+) -> Any:
+    if isinstance(value, str):
+        return _truncate_text(value, max_chars=max_chars)
+    if isinstance(value, bytes):
+        return _truncate_text(_as_text(value), max_chars=max_chars)
+    if isinstance(value, list):
+        items = [
+            _truncate_data(
+                item,
+                max_chars=max_chars,
+                max_list_items=max_list_items,
+                max_dict_items=max_dict_items,
+            )
+            for item in value[:max_list_items]
+        ]
+        if len(value) > max_list_items:
+            items.append({"_truncated_items": len(value) - max_list_items})
+        return items
+    if isinstance(value, tuple):
+        items = [
+            _truncate_data(
+                item,
+                max_chars=max_chars,
+                max_list_items=max_list_items,
+                max_dict_items=max_dict_items,
+            )
+            for item in value[:max_list_items]
+        ]
+        if len(value) > max_list_items:
+            items.append({"_truncated_items": len(value) - max_list_items})
+        return items
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= max_dict_items:
+                out["_truncated_keys"] = len(value) - max_dict_items
+                break
+            out[key] = _truncate_data(
+                item,
+                max_chars=max_chars,
+                max_list_items=max_list_items,
+                max_dict_items=max_dict_items,
+            )
+        return out
+    return value
+
+
 def _json(data: dict[str, Any]) -> str:
-    return json.dumps(data, indent=2, default=str)
+    serialized = json.dumps(_truncate_data(data), indent=2, default=str)
+    return _truncate_text(serialized, max_chars=MAX_TOOL_RESPONSE_CHARS)
 
 
 def _ok(**data: Any) -> str:
