@@ -83,7 +83,7 @@ class DockerGraphRuntime:
         }
         result = self.graph.invoke(
             initial_state,
-            config={"recursion_limit": 100, "configurable": {"thread_id": thread_id}},
+            config={"recursion_limit": 200, "configurable": {"thread_id": thread_id}},
         )
         return result.get("final_response", "")
 
