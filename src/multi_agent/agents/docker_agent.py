@@ -16,11 +16,8 @@ DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
 
 # Tools requiring human approval before execution
 DANGEROUS_TOOLS: tuple[str, ...] = (
-    "remove_container",
     "remove_image",
-    "remove_network",
     "prune_images",
-    "exec_in_container",
 )
 
 # Tools that are auto-rejected without user prompt
