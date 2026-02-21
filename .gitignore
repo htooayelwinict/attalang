@@ -48,3 +48,5 @@ sample-srcs/
 # Claude
 .claude
 CLAUDE.md
+# Environment
+.env
