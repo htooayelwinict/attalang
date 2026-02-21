@@ -1,6 +1,6 @@
 # AttaLang
 
-Docker management agent with natural language interface. Two parallel implementations using LangGraph and Pydantic-DeepAgents.
+Docker management agent with natural language interface and HITL security. Two parallel implementations using LangGraph and Pydantic-DeepAgents.
 
 ## Quick Start
 
@@ -15,10 +15,10 @@ python3 -m venv .venv
 cp .env.example .env
 # Edit .env and add OPENROUTER_API_KEY
 
-# Run V1 (LangGraph)
-.venv/bin/python -m src.multi_agent.runtime.cli
+# Run V1 with HITL security (recommended for production)
+.venv/bin/python -m src.multi_agent.runtime.cli --hitl
 
-# Run V2 (Pydantic) - recommended
+# Run V2 (Pydantic) - verbose mode
 .venv/bin/python -m src.multi_agent_v2.runtime.cli_v2 -v
 ```
 
@@ -38,6 +38,38 @@ cp .env.example .env
 "stop and remove all containers"
 ```
 
+## CLI Commands
+
+```bash
+# V1 (LangGraph) - with HITL security
+multi-agent-cli --hitl                      # Interactive + security prompts
+multi-agent-cli --prompt "list containers"  # Single-shot
+
+# V2 (Pydantic)
+multi-agent-cli-v2 -v                       # Verbose (shows tool calls)
+multi-agent-cli-v2 --prompt "..."           # Single-shot
+```
+
+## HITL Security (V1)
+
+Human-in-the-Loop security controls for dangerous Docker operations:
+
+| Category | Tools | Behavior |
+|----------|-------|----------|
+| Safe | list_*, inspect_*, logs, stats | Execute directly |
+| Dangerous | remove_image, prune_images | Prompt: "⚠️ Approve?" |
+| Blocked | remove_volume, prune_*, system_prune | Auto-reject: "🚫 BLOCKED" |
+
+```bash
+# Enable HITL
+multi-agent-cli --hitl
+
+# Blocked operation (auto-rejected)
+"remove the app-data volume"
+🚫 BLOCKED: remove_volume - {'name': 'app-data'}
+Operation remove_volume is not allowed.
+```
+
 ## Documentation
 
 | Doc | Description |
@@ -45,20 +77,8 @@ cp .env.example .env
 | [Project Overview](docs/project-overview-pdr.md) | Goals, features, PDR |
 | [Codebase Summary](docs/codebase-summary.md) | File structure and key files |
 | [Code Standards](docs/code-standards.md) | Conventions and patterns |
-| [System Architecture](docs/system-architecture.md) | Design and data flow |
-
-## CLI Commands
-
-```bash
-# V1 (LangGraph)
-multi-agent-cli                           # Interactive mode
-multi-agent-cli --prompt "list containers"  # Single-shot
-
-# V2 (Pydantic)
-multi-agent-cli-v2                        # Interactive mode
-multi-agent-cli-v2 -v                     # Verbose (shows tool calls)
-multi-agent-cli-v2 --prompt "..."         # Single-shot
-```
+| [System Architecture](docs/system-architecture.md) | Design and HITL flow |
+| [Tool Prevention Patterns](docs/TOOL-PREVENTION-PATTERNS.md) | HITL security patterns |
 
 ## Tech Stack
 
@@ -67,15 +87,8 @@ multi-agent-cli-v2 --prompt "..."         # Single-shot
 | Framework | LangChain DeepAgents | Pydantic-DeepAgents |
 | LLM | OpenRouter | OpenRouter |
 | Tools | Docker SDK (direct) | Docker SDK (prefixed) |
+| Security | HITL + auto-reject | - |
 | Planning | Built-in todos | docker_create_plan |
-
-## Architecture
-
-Both versions use a single agent architecture:
-```
-V1: Single Agent → ALL_DOCKER_TOOLS → Docker SDK
-V2: Single Agent → PrefixedToolset → Docker SDK
-```
 
 ## Development
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-AttaLang provides two parallel single-agent implementations for Docker management:
+AttaLang provides two parallel single-agent implementations for Docker management with Human-in-the-Loop (HITL) security controls:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -14,17 +14,18 @@ AttaLang provides two parallel single-agent implementations for Docker managemen
               ▼                               ▼
 ┌─────────────────────────┐     ┌─────────────────────────┐
 │  V1: LangChain          │     │    V2: Pydantic-AI      │
-│  DeepAgents             │     │                         │
+│  DeepAgents + HITL      │     │                         │
 │                         │     │                         │
 │  ┌─────────────────┐    │     │  ┌─────────────────┐   │
 │  │ DockerAgent     │    │     │  │ DockerAgentV2   │   │
 │  │ (Single Agent)  │    │     │  │ (Single Agent)  │   │
+│  │ + interrupt_on  │    │     │  │                 │   │
 │  └────────┬────────┘    │     │  └────────┬────────┘   │
 │           │             │     │           │            │
 │           ▼             │     │           ▼            │
 │  ┌─────────────────┐    │     │  ┌─────────────────┐   │
 │  │ ALL_DOCKER_TOOLS│    │     │  │ PrefixedToolset │   │
-│  │ (direct access) │    │     │  │ (docker_*)      │   │
+│  │ + HITL checks   │    │     │  │ (docker_*)      │   │
 │  └────────┬────────┘    │     │  └────────┬────────┘   │
 │           │             │     │           │            │
 │           ▼             │     │           ▼            │
@@ -36,42 +37,108 @@ AttaLang provides two parallel single-agent implementations for Docker managemen
 
 ## V1 Architecture (LangChain DeepAgents)
 
-### Request Flow
+### Request Flow with HITL
 ```
-User Prompt → CLI → DockerRuntime → DockerAgent
-                                       ↓
-                              Parse prompt with LLM
-                                       ↓
-                              Select tool from ALL_DOCKER_TOOLS
-                                       ↓
-                              Execute tool directly
-                                       ↓
-                              Return result via MemorySaver
+User Prompt → CLI (--hitl) → DockerRuntime → DockerAgent
+                                            ↓
+                                   Parse prompt with LLM
+                                            ↓
+                                   Select tool from ALL_DOCKER_TOOLS
+                                            ↓
+                              ┌─────────────┴─────────────┐
+                              │                           │
+                        Safe Tool                  Dangerous Tool
+                              │                           │
+                              ▼                           ▼
+                        Execute                 __interrupt__ triggered
+                              │                           │
+                              │                    ┌──────┴──────┐
+                              │                    │             │
+                              │               Auto-reject   Prompt user
+                              │                    │             │
+                              │                    ▼             ▼
+                              │              "🚫 BLOCKED"   "⚠️ Approve?"
+                              │                    │             │
+                              │               reject         approve/reject
+                              │                    │             │
+                              └────────────────────┴──────┬──────┘
+                                                        │
+                                                        ▼
+                                              Return result via MemorySaver
 ```
 
 ### Key Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `DockerAgent` | `agents/docker_agent.py` | Single agent with direct tools |
+| `DockerAgent` | `agents/docker_agent.py` | Agent with HITL support |
 | `DockerRuntime` | `runtime/runtime.py` | Runtime wrapper |
 | `docker_tools.py` | `tools/docker_tools.py` | 40+ Docker SDK wrappers |
 | `create_openrouter_llm` | `utils/llm.py` | OpenRouter LLM factory |
 | `MemorySaver` | langgraph | Checkpointer for state |
 
-### Agent Building
+### HITL Configuration
+
+```python
+# Tools requiring user approval
+DANGEROUS_TOOLS = ("remove_image", "prune_images")
+
+# Tools auto-rejected (no user prompt)
+AUTO_REJECT_TOOLS = ("remove_volume", "prune_volumes", "docker_system_prune")
+
+# interrupt_on config
+interrupt_on = {
+    "remove_image": {"allowed_decisions": ["approve", "reject"]},
+    "remove_volume": {"allowed_decisions": ["reject"]},  # Auto-reject only
+}
+```
+
+### Agent Building with HITL
 ```python
 backend = FilesystemBackend(root_dir=str(workspace))
 checkpointer = MemorySaver()
 
+# Configure interrupts
+interrupt_on = {
+    tool: {"allowed_decisions": ["approve", "reject"]}
+    for tool in DANGEROUS_TOOLS
+}
+for tool in AUTO_REJECT_TOOLS:
+    interrupt_on[tool] = {"allowed_decisions": ["reject"]}
+
 agent = create_deep_agent(
     model=model,
-    tools=ALL_DOCKER_TOOLS,      # Direct tool list
+    tools=ALL_DOCKER_TOOLS,
     system_prompt=instructions,
     skills=[skills_dir],
     backend=backend,
     checkpointer=checkpointer,
+    interrupt_on=interrupt_on,  # Enable HITL
 )
+```
+
+### HITL Interrupt Handling
+
+```python
+def invoke(self, message: str, thread_id: str | None = None) -> str:
+    result = self._agent.invoke(...)
+
+    while result.get("__interrupt__"):
+        decisions = []
+        for action in action_requests:
+            tool_name = action.get("name")
+
+            if tool_name in self._auto_reject_tools:
+                # Auto-reject without prompting
+                decisions.append({"type": "reject", "message": "Blocked"})
+            else:
+                # Prompt user
+                response = input("Approve? [y/n]: ")
+                decisions.append({"type": "approve" if response == "y" else "reject"})
+
+        result = self._agent.invoke(Command(resume={"decisions": decisions}))
+
+    return self._extract_text(result)
 ```
 
 ## V2 Architecture (Pydantic-DeepAgents)
@@ -116,13 +183,43 @@ agent.iter() → UserPromptNode → ModelRequestNode → CallToolsNode → End
 
 | Aspect | V1 (LangChain) | V2 (Pydantic) |
 |--------|----------------|---------------|
-| Architecture | Single agent | Single agent |
+| Architecture | Single agent + HITL | Single agent |
 | Tool access | Direct list | Prefixed toolset |
 | Tool prefix | None | `docker_` |
 | Planning | Built-in todos | docker_create_plan |
 | Verbose mode | LangSmith tracing | -v flag |
+| HITL Security | ✅ interrupt_on + auto-reject | ❌ Not implemented |
 | State | MemorySaver | Thread deps |
 | Dependencies | langchain, langgraph | pydantic-deep |
+
+## Security (V1 HITL)
+
+### Tool Categories
+
+| Category | Tools | Behavior |
+|----------|-------|----------|
+| Safe | list_*, inspect_*, stats, logs | Execute directly |
+| Dangerous | remove_image, prune_images | Prompt user: "⚠️ Approve?" |
+| Blocked | remove_volume, prune_*, system_prune | Auto-reject: "🚫 BLOCKED" |
+
+### Usage
+```bash
+# Enable HITL security
+multi-agent-cli --hitl
+
+# Safe operation - executes directly
+"list all containers"
+
+# Dangerous - prompts for approval
+"remove the nginx image"
+⚠️  DANGEROUS OPERATION: remove_image
+   Arguments: {'image': 'nginx'}
+Approve? [y/n]:
+
+# Blocked - auto-rejected
+"remove the app-data volume"
+🚫 BLOCKED: remove_volume - {'name': 'app-data'}
+```
 
 ## Data Flow
 
