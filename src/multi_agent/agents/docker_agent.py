@@ -90,7 +90,7 @@ class DockerAgent:
         self._agent = self._build_agent()
 
     def _build_agent(self) -> Any:
-        backend = FilesystemBackend(root_dir=str(self._workspace_dir))
+        backend = FilesystemBackend(root_dir=str(self._workspace_dir), virtual_mode=True)
         checkpointer = MemorySaver()
 
         return create_deep_agent(

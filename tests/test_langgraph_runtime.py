@@ -1,5 +1,8 @@
 from typing import cast
 
+import pytest
+from pydantic import ValidationError
+
 from src.multi_agent.agents import DockerAgent
 from src.multi_agent.runtime import runtime as runtime_module
 from src.multi_agent.runtime.nodes import (
@@ -9,6 +12,7 @@ from src.multi_agent.runtime.nodes import (
     RouterNode,
 )
 from src.multi_agent.runtime.runtime import DockerGraphRuntime
+from src.multi_agent.runtime.states import CoordinatorState
 
 
 class StubWorker:
@@ -84,3 +88,35 @@ def test_graph_compiles_with_expected_entry_behavior(monkeypatch) -> None:
 
     assert runtime.graph.__class__.__name__ == "CompiledStateGraph"
     assert runtime.run_turn("hello", thread_id="thread-create") == "compiled-ok"
+
+
+def test_coordinator_state_rejects_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        CoordinatorState(user_input="test", unknown_field="value")
+
+
+def test_coordinator_state_optional_fields_default_to_none() -> None:
+    state = CoordinatorState()
+    assert state.origin is None
+    assert state.user_input is None
+    assert state.route is None
+
+
+def test_coordinator_state_model_dump_serializes_values() -> None:
+    state = CoordinatorState(user_input="test", route="docker")
+    data = state.model_dump()
+    assert data["user_input"] == "test"
+    assert data["route"] == "docker"
+
+
+def test_graph_invoke_returns_mapping() -> None:
+    worker = StubWorker(response="mapping-ok")
+    runtime = _build_runtime(worker)
+
+    result = runtime.graph.invoke(
+        CoordinatorState(origin="cli", user_input="hello", thread_id="thread-map"),
+        config={"recursion_limit": 200, "configurable": {"thread_id": "thread-map"}},
+    )
+
+    assert isinstance(result, dict)
+    assert result.get("final_response", "") == "mapping-ok"

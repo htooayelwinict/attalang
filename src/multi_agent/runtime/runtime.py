@@ -50,9 +50,9 @@ class DockerGraphRuntime:
         return runtime
 
     def _route_after_router(self, state: CoordinatorState) -> str:
-        if state.get("error"):
+        if state.error:
             return "finalize_response"
-        if state.get("route") == "docker":
+        if state.route == "docker":
             return "run_docker"
         return "finalize_response"
 
@@ -76,16 +76,16 @@ class DockerGraphRuntime:
         return builder.compile(checkpointer=MemorySaver())
 
     def run_turn(self, user_input: str, thread_id: str) -> str:
-        initial_state: CoordinatorState = {
-            "origin": "cli",
-            "user_input": user_input,
-            "thread_id": thread_id,
-        }
+        initial_state = CoordinatorState(
+            origin="cli",
+            user_input=user_input,
+            thread_id=thread_id,
+        )
         result = self.graph.invoke(
             initial_state,
             config={"recursion_limit": 200, "configurable": {"thread_id": thread_id}},
         )
-        return result.get("final_response", "")
+        return result.get("final_response", "") or ""
 
 
 def create_docker_graph_runtime(

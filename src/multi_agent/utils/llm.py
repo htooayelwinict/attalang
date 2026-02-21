@@ -23,7 +23,7 @@ def create_openrouter_llm(
         "base_url": "https://openrouter.ai/api/v1",
         "api_key": api_key or os.getenv("OPENROUTER_API_KEY"),
         "default_headers": {
-            "HTTP-Referer": "https://github.com/lewisae/deepagent",
+            "HTTP-Referer": "https://github.com/htooayelwinict/attalang",
             "X-Title": app_title,
         },
     }
