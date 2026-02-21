@@ -19,11 +19,15 @@ DANGEROUS_TOOLS: tuple[str, ...] = (
     "remove_container",
     "remove_image",
     "remove_network",
-    "remove_volume",
-    "docker_system_prune",
     "prune_images",
-    "prune_volumes",
     "exec_in_container",
+)
+
+# Tools that are auto-rejected without user prompt
+AUTO_REJECT_TOOLS: tuple[str, ...] = (
+    "remove_volume",
+    "prune_volumes",
+    "docker_system_prune",
 )
 
 DOCKER_AGENT_INSTRUCTIONS = """You are a Docker operations agent. Execute tasks efficiently with minimal tool calls.
@@ -75,6 +79,7 @@ class DockerAgent:
         app_title: str = "MultiAgentDocker",
         enable_hitl: bool = False,
         dangerous_tools: tuple[str, ...] | None = None,
+        auto_reject_tools: tuple[str, ...] | None = None,
     ):
         if isinstance(model, BaseChatModel):
             self._model = model
@@ -89,6 +94,7 @@ class DockerAgent:
         self._instructions = instructions or DOCKER_AGENT_INSTRUCTIONS
         self._enable_hitl = enable_hitl
         self._dangerous_tools = dangerous_tools if dangerous_tools is not None else DANGEROUS_TOOLS
+        self._auto_reject_tools = auto_reject_tools if auto_reject_tools is not None else AUTO_REJECT_TOOLS
 
         self._workspace_dir = (
             Path(workspace_dir)
@@ -112,11 +118,14 @@ class DockerAgent:
 
         # Configure interrupt for dangerous tools if HITL enabled
         interrupt_on: dict[str, dict[str, list[str]]] | None = None
-        if self._enable_hitl and self._dangerous_tools:
-            interrupt_on = {
-                tool: {"allowed_decisions": ["approve", "reject"]}
-                for tool in self._dangerous_tools
-            }
+        if self._enable_hitl:
+            interrupt_on = {}
+            # Approval-required tools
+            for tool in self._dangerous_tools:
+                interrupt_on[tool] = {"allowed_decisions": ["approve", "reject"]}
+            # Auto-reject tools (only reject allowed)
+            for tool in self._auto_reject_tools:
+                interrupt_on[tool] = {"allowed_decisions": ["reject"]}
 
         return create_deep_agent(
             model=self._model,
@@ -125,7 +134,7 @@ class DockerAgent:
             skills=[str(self._skills_dir)] if self._skills_dir else None,
             backend=backend,
             checkpointer=checkpointer,
-            interrupt_on=interrupt_on,  # type: ignore[arg-type]
+            interrupt_on=interrupt_on or None,  # type: ignore[arg-type]
         )
 
     @staticmethod
@@ -174,29 +183,37 @@ class DockerAgent:
             config=config,
         )
 
-        # Handle HITL interrupts inline
+        # Handle HITL interrupts
         while result.get("__interrupt__"):
             if not self._enable_hitl:
-                break  # Shouldn't happen, but safety
+                break
 
+            decisions = []
             for interrupt in result["__interrupt__"]:
                 interrupt_value = getattr(interrupt, "value", interrupt)
-                if isinstance(interrupt_value, list):
-                    requests = interrupt_value
-                else:
-                    requests = [interrupt_value]
 
-                decisions = []
-                for req in requests:
-                    tool_name = req.get("tool_name", "unknown") if isinstance(req, dict) else str(req)
-                    tool_args = req.get("args", {}) if isinstance(req, dict) else {}
+                # Structure: {"action_requests": [...], "review_configs": [...]}
+                action_requests = interrupt_value.get("action_requests", []) if isinstance(interrupt_value, dict) else []
 
-                    # Prompt user
-                    print(f"\n⚠️  DANGEROUS OPERATION: {tool_name}")
-                    print(f"   Arguments: {tool_args}")
-                    response = input("Approve? [y/n]: ").strip().lower()
-                    decision = "approve" if response in ("y", "yes") else "reject"
-                    decisions.append({"type": decision})
+                for action in action_requests:
+                    tool_name = action.get("name", "unknown") if isinstance(action, dict) else "unknown"
+                    tool_args = action.get("args", {}) if isinstance(action, dict) else {}
+
+                    # Auto-reject tools - no user prompt
+                    if tool_name in self._auto_reject_tools:
+                        print(f"\n🚫 BLOCKED: {tool_name} - {tool_args}")
+                        decisions.append({
+                            "type": "reject",
+                            "message": f"Operation {tool_name} is not allowed by system administrator! STOP immediately and do not retry.",
+                        })
+                    else:
+                        # Prompt user for approval
+                        print(f"\n⚠️  DANGEROUS OPERATION: {tool_name}")
+                        print(f"   Arguments: {tool_args}")
+                        response = input("Approve? [y/n]: ").strip().lower()
+                        decisions.append({
+                            "type": "approve" if response in ("y", "yes") else "reject",
+                        })
 
             result = self._agent.invoke(
                 Command(resume={"decisions": decisions}),
@@ -228,6 +245,10 @@ class DockerAgent:
         return self._dangerous_tools
 
     @property
+    def auto_reject_tools(self) -> tuple[str, ...]:
+        return self._auto_reject_tools
+
+    @property
     def agent(self) -> Any:
         return self._agent
 
@@ -250,6 +271,7 @@ def create_docker_agent(
     app_title: str = "MultiAgentDocker",
     enable_hitl: bool = False,
     dangerous_tools: tuple[str, ...] | None = None,
+    auto_reject_tools: tuple[str, ...] | None = None,
 ) -> DockerAgent:
     return DockerAgent(
         model=model,
@@ -261,4 +283,5 @@ def create_docker_agent(
         app_title=app_title,
         enable_hitl=enable_hitl,
         dangerous_tools=dangerous_tools,
+        auto_reject_tools=auto_reject_tools,
     )
