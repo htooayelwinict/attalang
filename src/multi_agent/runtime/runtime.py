@@ -26,6 +26,7 @@ class DockerGraphRuntime:
         workspace_dir: str | None = None,
         skills_dir: str | None = None,
         app_title: str = "MultiAgentDocker",
+        enable_hitl: bool = False,
     ) -> "DockerGraphRuntime":
         worker = create_docker_agent(
             model=model,
@@ -33,6 +34,7 @@ class DockerGraphRuntime:
             workspace_dir=workspace_dir,
             skills_dir=skills_dir,
             app_title=app_title,
+            enable_hitl=enable_hitl,
         )
         docker_node = DockerWorkerNode(worker=worker)
         router_node = RouterNode()
@@ -94,6 +96,7 @@ def create_docker_graph_runtime(
     workspace_dir: str | None = None,
     skills_dir: str | None = None,
     app_title: str = "MultiAgentDocker",
+    enable_hitl: bool = False,
 ) -> DockerGraphRuntime:
     return DockerGraphRuntime.create(
         model=model,
@@ -101,4 +104,5 @@ def create_docker_graph_runtime(
         workspace_dir=workspace_dir,
         skills_dir=skills_dir,
         app_title=app_title,
+        enable_hitl=enable_hitl,
     )

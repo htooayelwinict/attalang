@@ -6,12 +6,25 @@ from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 
 from src.multi_agent.tools import ALL_DOCKER_TOOLS
 from src.multi_agent.utils import create_openrouter_llm
 
 DEFAULT_WORKSPACE = "/tmp/multi-agent-docker-workspace"
 DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
+
+# Tools requiring human approval before execution
+DANGEROUS_TOOLS: tuple[str, ...] = (
+    "remove_container",
+    "remove_image",
+    "remove_network",
+    "remove_volume",
+    "docker_system_prune",
+    "prune_images",
+    "prune_volumes",
+    "exec_in_container",
+)
 
 DOCKER_AGENT_INSTRUCTIONS = """You are a Docker operations agent. Execute tasks efficiently with minimal tool calls.
 
@@ -60,6 +73,8 @@ class DockerAgent:
         skills_dir: str | Path | None = None,
         workspace_dir: str | Path | None = None,
         app_title: str = "MultiAgentDocker",
+        enable_hitl: bool = False,
+        dangerous_tools: tuple[str, ...] | None = None,
     ):
         if isinstance(model, BaseChatModel):
             self._model = model
@@ -72,6 +87,8 @@ class DockerAgent:
 
         self._tools = list(tools) if tools is not None else list(ALL_DOCKER_TOOLS)
         self._instructions = instructions or DOCKER_AGENT_INSTRUCTIONS
+        self._enable_hitl = enable_hitl
+        self._dangerous_tools = dangerous_tools if dangerous_tools is not None else DANGEROUS_TOOLS
 
         self._workspace_dir = (
             Path(workspace_dir)
@@ -93,6 +110,14 @@ class DockerAgent:
         backend = FilesystemBackend(root_dir=str(self._workspace_dir), virtual_mode=True)
         checkpointer = MemorySaver()
 
+        # Configure interrupt for dangerous tools if HITL enabled
+        interrupt_on: dict[str, dict[str, list[str]]] | None = None
+        if self._enable_hitl and self._dangerous_tools:
+            interrupt_on = {
+                tool: {"allowed_decisions": ["approve", "reject"]}
+                for tool in self._dangerous_tools
+            }
+
         return create_deep_agent(
             model=self._model,
             tools=self._tools,
@@ -100,6 +125,7 @@ class DockerAgent:
             skills=[str(self._skills_dir)] if self._skills_dir else None,
             backend=backend,
             checkpointer=checkpointer,
+            interrupt_on=interrupt_on,  # type: ignore[arg-type]
         )
 
     @staticmethod
@@ -142,10 +168,41 @@ class DockerAgent:
         return config
 
     def invoke(self, message: str, thread_id: str | None = None) -> str:
+        config = self._make_config(thread_id)
         result = self._agent.invoke(
             {"messages": [{"role": "user", "content": message}]},
-            config=self._make_config(thread_id),
+            config=config,
         )
+
+        # Handle HITL interrupts inline
+        while result.get("__interrupt__"):
+            if not self._enable_hitl:
+                break  # Shouldn't happen, but safety
+
+            for interrupt in result["__interrupt__"]:
+                interrupt_value = getattr(interrupt, "value", interrupt)
+                if isinstance(interrupt_value, list):
+                    requests = interrupt_value
+                else:
+                    requests = [interrupt_value]
+
+                decisions = []
+                for req in requests:
+                    tool_name = req.get("tool_name", "unknown") if isinstance(req, dict) else str(req)
+                    tool_args = req.get("args", {}) if isinstance(req, dict) else {}
+
+                    # Prompt user
+                    print(f"\n⚠️  DANGEROUS OPERATION: {tool_name}")
+                    print(f"   Arguments: {tool_args}")
+                    response = input("Approve? [y/n]: ").strip().lower()
+                    decision = "approve" if response in ("y", "yes") else "reject"
+                    decisions.append({"type": decision})
+
+            result = self._agent.invoke(
+                Command(resume={"decisions": decisions}),
+                config=config,
+            )
+
         return self._extract_text(result)
 
     async def ainvoke(self, message: str, thread_id: str | None = None) -> str:
@@ -161,6 +218,14 @@ class DockerAgent:
             config=self._make_config(thread_id),
         ):
             yield event
+
+    @property
+    def enable_hitl(self) -> bool:
+        return self._enable_hitl
+
+    @property
+    def dangerous_tools(self) -> tuple[str, ...]:
+        return self._dangerous_tools
 
     @property
     def agent(self) -> Any:
@@ -183,6 +248,8 @@ def create_docker_agent(
     skills_dir: str | Path | None = None,
     workspace_dir: str | Path | None = None,
     app_title: str = "MultiAgentDocker",
+    enable_hitl: bool = False,
+    dangerous_tools: tuple[str, ...] | None = None,
 ) -> DockerAgent:
     return DockerAgent(
         model=model,
@@ -192,4 +259,6 @@ def create_docker_agent(
         skills_dir=skills_dir,
         workspace_dir=workspace_dir,
         app_title=app_title,
+        enable_hitl=enable_hitl,
+        dangerous_tools=dangerous_tools,
     )
