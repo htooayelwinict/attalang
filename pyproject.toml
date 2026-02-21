@@ -33,9 +33,14 @@ dev = [
     "ruff>=0.4.0",
     "mypy>=1.0.0",
 ]
+agentv2 = [
+    "pydantic-deep>=0.1.0,<1.0.0",
+    "pydantic-ai-backend>=0.1.0,<1.0.0",
+]
 
 [project.scripts]
 multi-agent-cli = "src.multi_agent.runtime.cli:main"
+multi-agent-cli-v2 = "src.multi_agent_v2.runtime.cli_v2:main"
 
 [tool.setuptools]
 package-dir = {"" = "."}
