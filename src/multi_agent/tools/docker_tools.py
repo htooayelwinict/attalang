@@ -494,7 +494,7 @@ def docker_bash(
     cwd: str | None = None,
     timeout: int = DOCKER_CLI_TIMEOUT_SECONDS,
 ) -> str:
-    """Execute whitelisted Docker CLI commands."""
+    """Execute whitelisted Docker CLI commands. Returns raw stdout on success, error string on failure."""
     try:
         command_parts = shlex.split(command)
         arg_parts = shlex.split(args) if args else []
@@ -503,21 +503,14 @@ def docker_bash(
             full_args = full_args[1:]
 
         if not full_args:
-            return _error("Docker command is required")
+            return "Error: Docker command is required"
 
         code, stdout, stderr = _run_safe_docker_cli(full_args, cwd=cwd, timeout=timeout)
-        payload = {
-            "command": "docker " + " ".join(full_args),
-            "exit_code": code,
-            "stdout": stdout,
-            "stderr": stderr,
-        }
         if code == 0:
-            return _ok(**payload)
-        message = stderr.strip() or f"Docker command failed with exit code {code}"
-        return _error(message, **payload)
+            return stdout
+        return f"Error (exit {code}): {stderr.strip() or 'Command failed'}"
     except Exception as exc:
-        return _error(str(exc))
+        return f"Error: {str(exc)}"
 
 
 @tool

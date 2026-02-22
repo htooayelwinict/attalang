@@ -47,6 +47,8 @@ Reuse existing resources when valid.
 4. DONE: report without redundant re-checks
 
 ## 5. ERROR HANDLING
-- `"success": false` means failure
-- `"success": true` means success
+- `docker_bash` output starting with `Error:` means failure
+- `docker_bash` output not starting with `Error:` means success
+- SDK tool JSON with `"success": false` means failure
+- SDK tool JSON with `"success": true` means success
 - Truncated output is normal and should not be treated as failure

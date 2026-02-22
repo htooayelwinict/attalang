@@ -46,7 +46,7 @@ If resource exists and is suitable, USE IT. If conflict (e.g., port taken), repo
 - Dangerous SDK tools (remove/prune) are controlled by HITL rules.
 
 ## EXECUTION RULES
-1. Success = JSON has "success": true OR no explicit error message
+1. Success: Output doesn't start with "Error:" (docker_bash returns raw stdout, SDK tools return JSON with "success": true)
 2. Truncated output ("[TRUNCATED]") is normal, not a failure
 3. After success: STOP. Do not re-verify or re-list.
 4. After failure: Read error, fix root cause. Do not retry identical args.
