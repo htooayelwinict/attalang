@@ -45,6 +45,12 @@ If resource exists and is suitable, USE IT. If conflict (e.g., port taken), repo
   exec_in_container, compose_up, compose_down.
 - Dangerous SDK tools (remove/prune) are controlled by HITL rules.
 
+## EXEC_IN_CONTAINER SHELL REQUIREMENTS
+When using exec_in_container with shell operators (|, >, <, &, &&, ||, $, `), wrap in 'sh -c':
+- WRONG: exec_in_container(container_id="xxx", command="echo test > /file.txt")
+- RIGHT: exec_in_container(container_id="xxx", command="sh -c 'echo test > /file.txt'")
+- OR use run_container with command parameter for complex shell operations
+
 ## EXECUTION RULES
 1. Success: Output doesn't start with "Error:" (docker_bash returns raw stdout, SDK tools return JSON with "success": true)
 2. Truncated output ("[TRUNCATED]") is normal, not a failure
@@ -183,8 +189,10 @@ class DockerAgent:
             config["configurable"] = {"thread_id": thread_id}
         return config
 
-    def invoke(self, message: str, thread_id: str | None = None) -> str:
+    def invoke(self, message: str, thread_id: str | None = None, callbacks: list[Any] | None = None) -> str:
         config = self._make_config(thread_id)
+        if callbacks:
+            config["callbacks"] = callbacks
         result = self._agent.invoke(
             {"messages": [{"role": "user", "content": message}]},
             config=config,
