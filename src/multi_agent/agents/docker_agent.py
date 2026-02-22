@@ -31,11 +31,19 @@ DOCKER_AGENT_INSTRUCTIONS = """You are a Docker operations agent. Execute tasks 
 
 ## MANDATORY PRE-CHECK RULE
 Before creating ANY resource (container, network, volume), you MUST check if it already exists:
-- Creating container: list_containers first to check name/port conflicts
-- Creating network: list_networks first to check name conflicts
-- Creating volume: list_volumes first to check name conflicts
+- Creating container: docker_bash command 'ps -a' first to check name/port conflicts
+- Creating network: docker_bash command 'network ls' first to check name conflicts
+- Creating volume: docker_bash command 'volume ls' first to check name conflicts
 
 If resource exists and is suitable, USE IT. If conflict (e.g., port taken), report it.
+
+## TOOL PREFERENCES
+- Use docker_bash for all safe read/start/stop/restart/inspect/log/stat/version/info operations.
+- Use SDK tools only when operation needs structured options:
+  run_container, pull_image, build_image, tag_image,
+  create_network, create_volume, connect_to_network, disconnect_from_network,
+  exec_in_container, compose_up, compose_down.
+- Dangerous SDK tools (remove/prune) are controlled by HITL rules.
 
 ## EXECUTION RULES
 1. Success = JSON has "success": true OR no explicit error message
@@ -91,7 +99,9 @@ class DockerAgent:
         self._instructions = instructions or DOCKER_AGENT_INSTRUCTIONS
         self._enable_hitl = enable_hitl
         self._dangerous_tools = dangerous_tools if dangerous_tools is not None else DANGEROUS_TOOLS
-        self._auto_reject_tools = auto_reject_tools if auto_reject_tools is not None else AUTO_REJECT_TOOLS
+        self._auto_reject_tools = (
+            auto_reject_tools if auto_reject_tools is not None else AUTO_REJECT_TOOLS
+        )
 
         self._workspace_dir = (
             Path(workspace_dir)
@@ -190,27 +200,37 @@ class DockerAgent:
                 interrupt_value = getattr(interrupt, "value", interrupt)
 
                 # Structure: {"action_requests": [...], "review_configs": [...]}
-                action_requests = interrupt_value.get("action_requests", []) if isinstance(interrupt_value, dict) else []
+                action_requests = (
+                    interrupt_value.get("action_requests", [])
+                    if isinstance(interrupt_value, dict)
+                    else []
+                )
 
                 for action in action_requests:
-                    tool_name = action.get("name", "unknown") if isinstance(action, dict) else "unknown"
+                    tool_name = (
+                        action.get("name", "unknown") if isinstance(action, dict) else "unknown"
+                    )
                     tool_args = action.get("args", {}) if isinstance(action, dict) else {}
 
                     # Auto-reject tools - no user prompt
                     if tool_name in self._auto_reject_tools:
                         print(f"\n🚫 BLOCKED: {tool_name} - {tool_args}")
-                        decisions.append({
-                            "type": "reject",
-                            "message": f"Operation {tool_name} is not allowed by system administrator! STOP immediately and do not retry.",
-                        })
+                        decisions.append(
+                            {
+                                "type": "reject",
+                                "message": f"Operation {tool_name} is not allowed by system administrator! STOP immediately and do not retry.",
+                            }
+                        )
                     else:
                         # Prompt user for approval
                         print(f"\n⚠️  DANGEROUS OPERATION: {tool_name}")
                         print(f"   Arguments: {tool_args}")
                         response = input("Approve? [y/n]: ").strip().lower()
-                        decisions.append({
-                            "type": "approve" if response in ("y", "yes") else "reject",
-                        })
+                        decisions.append(
+                            {
+                                "type": "approve" if response in ("y", "yes") else "reject",
+                            }
+                        )
 
             result = self._agent.invoke(
                 Command(resume={"decisions": decisions}),

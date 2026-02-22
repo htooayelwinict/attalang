@@ -1,4 +1,7 @@
 from src.multi_agent.tools.docker_tools import (
+    AGENT_DANGEROUS_SDK_TOOLS,
+    AGENT_SAFE_TOOLS,
+    AGENT_SDK_TOOLS,
     ALL_DOCKER_TOOLS,
     COMPOSE_TOOLS,
     CONTAINER_TOOLS,
@@ -15,6 +18,7 @@ from src.multi_agent.tools.docker_tools import (
     create_network,
     create_volume,
     disconnect_from_network,
+    docker_bash,
     docker_system_info,
     docker_system_prune,
     docker_version,
@@ -44,6 +48,7 @@ from src.multi_agent.tools.docker_tools import (
 )
 
 __all__ = [
+    "docker_bash",
     "list_containers",
     "run_container",
     "start_container",
@@ -85,5 +90,8 @@ __all__ = [
     "VOLUME_TOOLS",
     "SYSTEM_TOOLS",
     "COMPOSE_TOOLS",
+    "AGENT_SAFE_TOOLS",
+    "AGENT_SDK_TOOLS",
+    "AGENT_DANGEROUS_SDK_TOOLS",
     "ALL_DOCKER_TOOLS",
 ]

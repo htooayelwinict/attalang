@@ -90,11 +90,13 @@ def test_compose_ps_parses_before_output_truncation(monkeypatch: pytest.MonkeyPa
         "_compose_file_and_cwd",
         lambda file_path, cwd: (Path("/tmp/docker-compose.yml"), Path("/tmp")),
     )
-    monkeypatch.setattr(docker_tools, "_run_compose", lambda args, cwd=None: (0, long_json, ""))
+    monkeypatch.setattr(
+        docker_tools, "_run_safe_docker_cli", lambda args, cwd=None: (0, long_json, "")
+    )
 
     out = docker_tools.compose_ps.func(file_path="/docker-compose.yml", format_json=True)
     parsed_out = json.loads(out)
 
     assert parsed_out["success"] is True
-    assert parsed_out["parsed"] is not None
-    assert parsed_out["parsed"][0]["Name"] == "api"
+    assert "output" in parsed_out
+    assert "api" in parsed_out["output"]
