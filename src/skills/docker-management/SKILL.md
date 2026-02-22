@@ -54,8 +54,10 @@ Check `list_containers` output for port bindings:
 ```
 
 ## 5. ERROR HANDLING
-- `"success": false` = failure, read error message
-- `"success": true` = success, move on
+- `docker_bash` output starting with `Error:` = failure
+- `docker_bash` output not starting with `Error:` = success
+- SDK tool JSON with `"success": false` = failure
+- SDK tool JSON with `"success": true` = success
 - Truncated output = normal, not error
 
 ## Anti-Patterns (DO NOT DO)
