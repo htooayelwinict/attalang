@@ -5,24 +5,17 @@ description: Docker operations with conflict-aware resource management
 
 # Docker Tools Reference
 
-## Container Tools
-list_containers, run_container, start_container, stop_container, restart_container,
-remove_container, get_container_logs, get_container_stats, exec_in_container, inspect_container
+## Primary Tool
+- `docker_bash` for safe read/start/stop/restart/inspect/log/stat/version/info operations.
 
-## Image Tools
-list_images, pull_image, build_image, tag_image, remove_image, inspect_image, prune_images
+## SDK Tools (structured operations)
+- `run_container`, `pull_image`, `build_image`, `tag_image`
+- `create_network`, `create_volume`, `connect_to_network`, `disconnect_from_network`
+- `exec_in_container`, `compose_up`, `compose_down`
 
-## Network Tools
-list_networks, create_network, remove_network, connect_to_network, disconnect_from_network, inspect_network
-
-## Volume Tools
-list_volumes, create_volume, remove_volume, inspect_volume, prune_volumes
-
-## Compose Tools
-compose_up, compose_down, compose_ps, compose_logs
-
-## System Tools
-docker_system_info, docker_system_prune, docker_version
+## Dangerous SDK Tools (HITL controlled)
+- `remove_image`, `prune_images`, `remove_container`
+- `remove_network`, `remove_volume`, `prune_volumes`, `docker_system_prune`
 
 ---
 
@@ -30,13 +23,12 @@ docker_system_info, docker_system_prune, docker_version
 
 ## 1. PRE-CHECK (MANDATORY)
 Before creating any resource, verify it doesn't exist:
-- `list_containers(all_containers=True)` before `run_container`
-- `list_networks()` before `create_network`
-- `list_volumes()` before `create_volume`
+- `docker_bash(command="ps", args="-a")` before `run_container`
+- `docker_bash(command="network ls")` before `create_network`
+- `docker_bash(command="volume ls")` before `create_volume`
 
 ## 2. PORT CONFLICTS
-Check `list_containers` output for port bindings:
-- Format: `{"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]}`
+Check `docker_bash(command="ps", args="-a")` output for container/port conflicts.
 - If port taken: report conflict, don't proceed
 
 ## 3. NAME CONFLICTS
@@ -47,9 +39,9 @@ Check `list_containers` output for port bindings:
 
 ## 4. EXECUTION PATTERN
 ```
-1. ASSESS: list_* to check current state
+1. ASSESS: use docker_bash read/list commands to check current state
 2. PLAN: identify gaps
-3. CREATE: only what's missing
+3. EXECUTE: create only what's missing
 4. DONE: report, don't re-verify
 ```
 
