@@ -715,13 +715,22 @@ def exec_in_container(
     privileged: bool = False,
     detach: bool = False,
 ) -> str:
-    """Execute a command in a container."""
+    """Execute a command in a container.
+
+    For commands with shell operators (|, >, <, &, &&, ||), wrap in 'sh -c' manually:
+    Example: exec_in_container(container_id="abc", command="sh -c 'echo test > /file.txt'")
+    """
+    import shlex
+
     try:
         client = _docker_client()
         container = client.containers.get(container_id)
 
+        # Docker SDK handles string commands - pass as-is for proper quoted string handling
+        cmd = command
+
         kwargs: dict[str, Any] = {
-            "cmd": command,
+            "cmd": cmd,
             "detach": detach,
             "privileged": privileged,
         }
