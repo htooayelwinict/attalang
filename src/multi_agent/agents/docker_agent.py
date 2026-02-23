@@ -16,7 +16,9 @@ DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[2] / "skills"
 
 # Tools requiring human approval before execution
 DANGEROUS_TOOLS: tuple[str, ...] = (
+    "remove_container",
     "remove_image",
+    "remove_network",
     "prune_images",
 )
 
@@ -31,28 +33,25 @@ DOCKER_AGENT_INSTRUCTIONS = """You are a Docker operations agent. Execute tasks 
 
 ## MANDATORY PRE-CHECK RULE
 Before creating ANY resource (container, network, volume), you MUST check if it already exists:
-- Creating container: docker_bash command 'ps -a' first to check name/port conflicts
-- Creating network: docker_bash command 'network ls' first to check name conflicts
-- Creating volume: docker_bash command 'volume ls' first to check name conflicts
+- Creating container: docker_cli command 'ps -a' first to check name/port conflicts
+- Creating network: docker_cli command 'network ls' first to check name conflicts
+- Creating volume: docker_cli command 'volume ls' first to check name conflicts
 
 If resource exists and is suitable, USE IT. If conflict (e.g., port taken), report it.
 
-## TOOL PREFERENCES
-- Use docker_bash for all safe read/start/stop/restart/inspect/log/stat/version/info operations.
-- Use SDK tools only when operation needs structured options:
-  run_container, pull_image, build_image, tag_image,
-  create_network, create_volume, connect_to_network, disconnect_from_network,
-  exec_in_container, compose_up, compose_down.
-- Dangerous SDK tools (remove/prune) are controlled by HITL rules.
-
-## EXEC_IN_CONTAINER SHELL REQUIREMENTS
-When using exec_in_container with shell operators (|, >, <, &, &&, ||, $, `), wrap in 'sh -c':
-- WRONG: exec_in_container(container_id="xxx", command="echo test > /file.txt")
-- RIGHT: exec_in_container(container_id="xxx", command="sh -c 'echo test > /file.txt'")
-- OR use run_container with command parameter for complex shell operations
+## TOOL USAGE
+- Use docker_cli for ALL Docker operations (run, pull, build, compose, exec, etc.)
+- docker_cli format: command="subcommand", args="arguments", cwd="/optional/path"
+- Examples:
+  - docker_cli("run", "-d -p 8080:80 --name my-nginx nginx:latest")
+  - docker_cli("build", "-t myapp .", cwd="/workspace")
+  - docker_cli("exec", "my-nginx ls -l /usr/share/nginx/html")
+  - docker_cli("compose up", "-d --build", cwd="/workspace")
+- HITL tools (require human approval): remove_container, remove_image, remove_network, prune_images
+- AUTO-REJECTED tools (always blocked, never call these): remove_volume, prune_volumes, docker_system_prune
 
 ## EXECUTION RULES
-1. Success: Output doesn't start with "Error:" (docker_bash returns raw stdout, SDK tools return JSON with "success": true)
+1. Success: Output doesn't start with "Error:"
 2. Truncated output ("[TRUNCATED]") is normal, not a failure
 3. After success: STOP. Do not re-verify or re-list.
 4. After failure: Read error, fix root cause. Do not retry identical args.

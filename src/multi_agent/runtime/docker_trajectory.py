@@ -3,12 +3,13 @@
 Detects Docker agent loops and triggers replan instead of hard abort.
 """
 
+import json
+import re
 import threading
 import time
 from typing import Any, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 
 
@@ -47,7 +48,7 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
     - Resource creation conflicts (network/volume already exists)
     - Port binding retries (same port, same failure)
     - Image pull retries (pulling same image multiple times)
-    - Identical command retries (same docker_bash command)
+    - Identical command retries (same docker_cli command)
     """
 
     def __init__(self, max_retries: int = 3) -> None:
@@ -57,7 +58,8 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
             max_retries: Max identical calls before triggering replan (default: 3)
         """
         self.trajectory: list[dict[str, Any]] = []
-        self._lock = threading.Lock()
+        # Use RLock for reentrancy - get_trajectory() called while lock held
+        self._lock = threading.RLock()
         self._loop_detected = False
         self._max_retries = max_retries
 
@@ -74,84 +76,98 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
     def _hash_input(self, input_str: str | dict) -> str:
         """Create simple hash of input for comparison."""
         if isinstance(input_str, dict):
-            # Sort keys for consistent hashing
             items = sorted(input_str.items())
             return str(hash(tuple(items)))
         return str(hash(input_str))
 
-    def _extract_container_name(self, tool: str, input_str: str | dict) -> str | None:
-        """Extract container name from tool call."""
-        if "run_container" in tool or "start" in tool or "stop" in tool:
-            if isinstance(input_str, dict):
-                return input_str.get("name")
-            if isinstance(input_str, str):
-                # Parse CLI args for -n or --name
-                if "-n " in input_str or "--name " in input_str:
-                    parts = input_str.split()
-                    for i, part in enumerate(parts):
-                        if part in ["-n", "--name"] and i + 1 < len(parts):
-                            return parts[i + 1]
+    def _parse_cli_input(self, input_str: str | dict) -> tuple[str, str]:
+        """Parse docker_cli input. Returns (command, args)."""
+        if isinstance(input_str, dict):
+            return input_str.get("command", ""), input_str.get("args", "") or ""
+        if isinstance(input_str, str):
+            try:
+                parsed = json.loads(input_str)
+                if isinstance(parsed, dict):
+                    return parsed.get("command", ""), parsed.get("args", "") or ""
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return "", str(input_str)
+
+    def _parse_arg(self, args: str, *flags: str) -> str | None:
+        """Extract value after a flag like --name or -p from args string."""
+        parts = args.split()
+        for i, part in enumerate(parts):
+            if part in flags and i + 1 < len(parts):
+                return parts[i + 1]
         return None
 
-    def _extract_resource_name(self, tool: str, input_str: str | dict, resource_type: str) -> str | None:
-        """Extract resource name (network/volume) from tool call."""
-        if resource_type in tool or "create" in tool:
-            if isinstance(input_str, dict):
-                return input_str.get("name")
-            if isinstance(input_str, str):
-                # Parse CLI for resource name
-                parts = input_str.split()
-                for i, part in enumerate(parts):
-                    if part in ["-n", "--name"] and i + 1 < len(parts):
-                        return parts[i + 1]
-                    # Last arg might be the name
-                    if i == len(parts) - 1 and not part.startswith("-"):
+    def _extract_container_name(self, input_str: str | dict) -> str | None:
+        """Extract container name from docker_cli run/start/stop/exec args."""
+        command, args = self._parse_cli_input(input_str)
+        if command in {"run", "start", "stop", "restart", "exec", "logs", "stats", "inspect"}:
+            name = self._parse_arg(args, "--name", "-n")
+            if name:
+                return name
+            # For start/stop/exec the first non-flag arg is the container id/name
+            if command in {"start", "stop", "restart", "exec", "logs", "stats", "inspect"}:
+                parts = args.split()
+                for part in parts:
+                    if not part.startswith("-"):
                         return part
         return None
 
+    def _extract_resource_name(self, input_str: str | dict, resource_type: str) -> str | None:
+        """Extract network or volume name from docker_cli create args."""
+        command, args = self._parse_cli_input(input_str)
+        # e.g. command="network create", args="my-network"
+        # e.g. command="volume create", args="my-volume"
+        if resource_type in command and "create" in command:
+            name = self._parse_arg(args, "--name", "-n")
+            if name:
+                return name
+            # The last positional arg is typically the name
+            parts = [p for p in args.split() if not p.startswith("-")]
+            if parts:
+                return parts[-1]
+        return None
+
     def _extract_port(self, input_str: str | dict) -> str | None:
-        """Extract port number from tool call."""
-        if isinstance(input_str, dict):
-            ports = input_str.get("ports")
-            if ports:
-                return str(ports)
-        if isinstance(input_str, str):
-            # Look for port patterns like "-p 8080:80" or "8080:80"
-            import re
-            match = re.search(r'-p\s+(\d+):', input_str)
+        """Extract host port from docker_cli run args."""
+        command, args = self._parse_cli_input(input_str)
+        if command == "run":
+            match = re.search(r'-p\s+(\d+):', args)
             if match:
                 return match.group(1)
         return None
 
+    def _is_container_op(self, input_str: str | dict) -> bool:
+        """Return True if this is a container lifecycle operation."""
+        command, _ = self._parse_cli_input(input_str)
+        return command in {"run", "start", "stop", "restart"}
+
     def _check_docker_loops(self, tool: str, input_str: str | dict, output: str | dict) -> None:
         """Check for Docker-specific loop patterns."""
         input_hash = self._hash_input(input_str)
+        output_str = str(output).lower()
+        command, args = self._parse_cli_input(input_str)
 
-        # 1. Identical command retry
+        # Track command history for general identical command detection (fallback check)
         self._command_history.append((tool, input_hash))
-        if len(self._command_history) >= self._max_retries:
-            recent = self._command_history[-self._max_retries:]
-            if len(set(cmd for cmd, _ in recent)) == 1 and len(set(h for _, h in recent)) == 1:
-                self._trigger_replan(
-                    f"Tool '{tool}' called {self._max_retries} times with identical parameters",
-                    {"tool": tool, "input": str(input_str)[:200]}
-                )
 
-        # 2. Container operation loop (start/stop same container repeatedly)
-        container_name = self._extract_container_name(tool, input_str)
-        if container_name and ("start" in tool or "stop" in tool or "run" in tool):
-            self._container_ops[container_name] = self._container_ops.get(container_name, 0) + 1
-            if self._container_ops[container_name] > self._max_retries + 1:
-                self._trigger_replan(
-                    f"Container '{container_name}' operated on {self._container_ops[container_name]} times - likely failing",
-                    {"container": container_name, "operation": tool}
-                )
+        # 1. Container operation loop (same container start/stop/run repeatedly)
+        if self._is_container_op(input_str):
+            container_name = self._extract_container_name(input_str)
+            if container_name:
+                self._container_ops[container_name] = self._container_ops.get(container_name, 0) + 1
+                if self._container_ops[container_name] > self._max_retries + 1:
+                    self._trigger_replan(
+                        f"Container '{container_name}' operated on {self._container_ops[container_name]} times - likely failing",
+                        {"container": container_name, "command": command}
+                    )
 
-        # 3. Network create conflict
-        network_name = self._extract_resource_name(tool, input_str, "network")
-        if network_name and "create" in tool:
-            # Check if output indicates "already exists"
-            output_str = str(output).lower()
+        # 2. Network create conflict (only on error)
+        network_name = self._extract_resource_name(input_str, "network")
+        if network_name:
             if "already exists" in output_str or "conflict" in output_str:
                 self._network_create_fails[network_name] = self._network_create_fails.get(network_name, 0) + 1
                 if self._network_create_fails[network_name] >= self._max_retries:
@@ -160,10 +176,9 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
                         {"network": network_name, "error": "already exists"}
                     )
 
-        # 4. Volume create conflict
-        volume_name = self._extract_resource_name(tool, input_str, "volume")
-        if volume_name and "create" in tool:
-            output_str = str(output).lower()
+        # 3. Volume create conflict (only on error)
+        volume_name = self._extract_resource_name(input_str, "volume")
+        if volume_name:
             if "already exists" in output_str or "conflict" in output_str:
                 self._volume_create_fails[volume_name] = self._volume_create_fails.get(volume_name, 0) + 1
                 if self._volume_create_fails[volume_name] >= self._max_retries:
@@ -172,10 +187,9 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
                         {"volume": volume_name, "error": "already exists"}
                     )
 
-        # 5. Port conflict retry
+        # 4. Port conflict retry (only on error)
         port = self._extract_port(input_str)
         if port:
-            output_str = str(output).lower()
             if "port is already allocated" in output_str or "bind: address already in use" in output_str:
                 self._port_conflicts[port] = self._port_conflicts.get(port, 0) + 1
                 if self._port_conflicts[port] >= self._max_retries:
@@ -184,14 +198,24 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
                         {"port": port, "error": "already allocated"}
                     )
 
-        # 6. Image pull retry (pulling same image multiple times)
-        if "pull" in tool:
-            img_name = str(input_str)[:100]  # First 100 chars usually has image name
-            self._resource_attempts[img_name] = self._resource_attempts.get(img_name, 0) + 1
-            if self._resource_attempts[img_name] > self._max_retries:
+        # 5. Image pull retry (pulling same image multiple times)
+        if command == "pull":
+            img_key = args.strip()[:100]
+            self._resource_attempts[img_key] = self._resource_attempts.get(img_key, 0) + 1
+            if self._resource_attempts[img_key] > self._max_retries:
                 self._trigger_replan(
-                    f"Image pull for '{img_name}' attempted {self._resource_attempts[img_name]} times - network or auth issue?",
-                    {"image": img_name}
+                    f"Image pull for '{img_key}' attempted {self._resource_attempts[img_key]} times - network or auth issue?",
+                    {"image": img_key}
+                )
+
+        # 6. Fallback: Identical command retry (catch-all for non-error patterns)
+        # Only fires if no specific pattern above matched
+        if len(self._command_history) >= self._max_retries:
+            recent = self._command_history[-self._max_retries:]
+            if len(set(cmd for cmd, _ in recent)) == 1 and len(set(h for _, h in recent)) == 1:
+                self._trigger_replan(
+                    f"Tool '{tool}' called {self._max_retries} times with identical parameters",
+                    {"tool": tool, "command": command, "args": args[:200]}
                 )
 
     def _trigger_replan(self, reason: str, loop_info: dict[str, Any]) -> None:
@@ -248,6 +272,7 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
 
             # Find matching tool_start event
             tool_name = None
+            input_str = None
             for event in reversed(self.trajectory):
                 if (
                     event.get("type") == "tool_start"
@@ -255,19 +280,15 @@ class DockerTrajectoryCallback(BaseCallbackHandler):
                     and event.get("run_id") == str(run_id)
                 ):
                     tool_name = event.get("tool")
+                    input_str = event.get("input")  # Capture input BEFORE changing status
                     event["output"] = output
                     event["end_time"] = end_time
                     event["latency"] = end_time - event.get("start_time", end_time)
                     event["status"] = "success"
                     break
 
-            if tool_name:
+            if tool_name and input_str:
                 # Check Docker-specific loops
-                input_str = next(
-                    (e.get("input") for e in reversed(self.trajectory)
-                     if e.get("run_id") == str(run_id) and e.get("type") == "tool_start"),
-                    ""
-                )
                 self._check_docker_loops(tool_name, input_str, output)
 
     def on_tool_error(

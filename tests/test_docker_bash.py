@@ -25,6 +25,18 @@ def test_validate_docker_command_allows_safe_commands() -> None:
         ["version", "--format", "json"],
         ["compose", "-f", "/tmp/compose.yml", "ps"],
         ["compose", "-f", "/tmp/compose.yml", "logs"],
+        # New allowed commands
+        ["run", "-d", "nginx:latest"],
+        ["pull", "nginx:latest"],
+        ["build", "-t", "myapp", "."],
+        ["tag", "myapp", "myapp:v1"],
+        ["network", "create", "mynet"],
+        ["volume", "create", "myvol"],
+        ["network", "connect", "mynet", "nginx"],
+        ["network", "disconnect", "mynet", "nginx"],
+        ["exec", "nginx", "ls", "/"],
+        ["compose", "up", "-d"],
+        ["compose", "down"],
     ]
     for command in allowed:
         docker_tools._validate_docker_command(command)
@@ -34,8 +46,6 @@ def test_validate_docker_command_rejects_unsafe_commands() -> None:
     blocked = [
         ["system", "prune"],
         ["rm", "-rf", "/"],
-        ["compose", "up"],
-        ["network", "create", "net"],
         ["ls", "-la"],
         ["ps", ";", "rm", "-rf", "/"],
     ]
@@ -77,10 +87,9 @@ def test_docker_bash_wraps_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", fake_run)
 
-    out = json.loads(docker_tools.docker_bash.func("docker ps", args="-a", cwd="/tmp", timeout=9))
+    out = docker_tools.docker_bash.func("docker ps", args="-a", cwd="/tmp", timeout=9)
 
-    assert out["success"] is True
-    assert out["stdout"] == "ok-output"
+    assert out == "ok-output"
     assert seen["args"] == ["ps", "-a"]
     assert seen["cwd"] == "/tmp"
     assert seen["timeout"] == 9
@@ -93,82 +102,98 @@ def test_docker_bash_wraps_failure(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda args, cwd=None, timeout=30: (1, "", "bad command"),
     )
 
-    out = json.loads(docker_tools.docker_bash.func("ps"))
+    out = docker_tools.docker_bash.func("ps")
 
-    assert out["success"] is False
-    assert "bad command" in out["error"]
-
-
-def test_list_containers_returns_lean_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    cli = "CONTAINER ID   IMAGE\nabc123         nginx:latest\n"
-    monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", lambda args, cwd=None: (0, cli, ""))
-
-    out = json.loads(docker_tools.list_containers.func(all_containers=True))
-
-    assert out["success"] is True
-    assert out["output"] == cli
+    assert out.startswith("Error (exit 1)")
+    assert "bad command" in out
 
 
-def test_list_images_returns_lean_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    cli = "REPOSITORY   TAG   IMAGE ID\nnginx        latest abc123\n"
-    monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", lambda args, cwd=None: (0, cli, ""))
+def test_docker_bash_run_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
 
-    out = json.loads(docker_tools.list_images.func())
-
-    assert out["success"] is True
-    assert out["output"] == cli
-
-
-def test_list_networks_returns_lean_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    cli = "NETWORK ID   NAME     DRIVER\n123456       bridge   bridge\n"
-    monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", lambda args, cwd=None: (0, cli, ""))
-
-    out = json.loads(docker_tools.list_networks.func())
-
-    assert out["success"] is True
-    assert out["output"] == cli
-
-
-def test_list_volumes_returns_lean_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    cli = "DRIVER    VOLUME NAME\nlocal     app-data\n"
-    monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", lambda args, cwd=None: (0, cli, ""))
-
-    out = json.loads(docker_tools.list_volumes.func())
-
-    assert out["success"] is True
-    assert out["output"] == cli
-
-
-def test_system_and_version_return_lean_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(args: list[str], cwd: str | None = None):
-        if args[0] == "info":
-            payload = {"Containers": 4, "Images": 12, "ServerVersion": "29.2.1"}
-            return 0, json.dumps(payload), ""
-        if args[0] == "version":
-            payload = {"Client": {"Version": "29.2.1"}, "Server": {"Version": "29.2.1"}}
-            return 0, json.dumps(payload), ""
-        raise AssertionError(f"Unexpected args: {args}")
+    def fake_run(args: list[str], cwd: str | None = None, timeout: int = 30):
+        seen["args"] = args
+        seen["cwd"] = cwd
+        seen["timeout"] = timeout
+        return 0, "container-abc123", ""
 
     monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", fake_run)
 
-    info_out = json.loads(docker_tools.docker_system_info.func())
-    version_out = json.loads(docker_tools.docker_version.func())
+    out = docker_tools.docker_bash.func("run", args="-d -p 8080:80 nginx:latest")
 
-    assert info_out["success"] is True
-    assert '"Containers": 4' in info_out["output"]
-    assert version_out["success"] is True
-    assert '"Version": "29.2.1"' in version_out["output"]
+    assert out == "container-abc123"
+    assert seen["args"] == ["run", "-d", "-p", "8080:80", "nginx:latest"]
+
+
+def test_docker_bash_exec_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(args: list[str], cwd: str | None = None, timeout: int = 30):
+        return 0, "file1.txt\nfile2.txt\n", ""
+
+    monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", fake_run)
+
+    out = docker_tools.docker_bash.func("exec", args="nginx ls /app")
+
+    assert out == "file1.txt\nfile2.txt\n"
+
+
+def test_docker_bash_compose_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(args: list[str], cwd: str | None = None, timeout: int = 30):
+        seen["args"] = args
+        seen["cwd"] = cwd
+        return 0, "Container started\n", ""
+
+    monkeypatch.setattr(docker_tools, "_run_safe_docker_cli", fake_run)
+
+    out = docker_tools.docker_bash.func("compose up", args="-d --build", cwd="/workspace")
+
+    assert out == "Container started\n"
+    assert seen["args"] == ["compose", "up", "-d", "--build"]
+    assert seen["cwd"] == "/workspace"
 
 
 def test_all_docker_tools_reduced_and_includes_bash() -> None:
     names = [tool.name for tool in docker_tools.ALL_DOCKER_TOOLS]
 
     assert "docker_bash" in names
+    # HITL tools should still be present
+    assert "remove_container" in names
+    assert "remove_image" in names
+    assert "prune_images" in names
+    assert "docker_system_prune" in names
+    # Old SDK tools should be gone
     assert "list_containers" not in names
-    assert "list_images" not in names
-    assert len(names) <= 20
+    assert "run_container" not in names
+    assert len(names) <= 10  # Should be much smaller now
 
 
-def test_hitl_constants_unchanged() -> None:
-    assert DANGEROUS_TOOLS == ("remove_image", "prune_images")
+def test_hitl_constants_updated() -> None:
+    # Updated DANGEROUS_TOOLS includes remove operations
+    assert "remove_container" in DANGEROUS_TOOLS
+    assert "remove_image" in DANGEROUS_TOOLS
+    assert "remove_network" in DANGEROUS_TOOLS
+    assert "prune_images" in DANGEROUS_TOOLS
+
+    # AUTO_REJECT_TOOLS unchanged
     assert AUTO_REJECT_TOOLS == ("remove_volume", "prune_volumes", "docker_system_prune")
+
+
+def test_safe_docker_commands_expanded() -> None:
+    safe_commands = docker_tools.SAFE_DOCKER_COMMANDS
+    # Original safe commands
+    assert "ps" in safe_commands
+    assert "images" in safe_commands
+    assert "logs" in safe_commands
+    # New safe commands
+    assert "run" in safe_commands
+    assert "pull" in safe_commands
+    assert "build" in safe_commands
+    assert "tag" in safe_commands
+    assert "network create" in safe_commands
+    assert "volume create" in safe_commands
+    assert "network connect" in safe_commands
+    assert "network disconnect" in safe_commands
+    assert "exec" in safe_commands
+    assert "compose up" in safe_commands
+    assert "compose down" in safe_commands
