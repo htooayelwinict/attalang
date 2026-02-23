@@ -13,6 +13,9 @@ def create_openrouter_llm(
     api_key: str | None = None,
     app_title: str = "MultiAgentDocker",
     extra_body: dict[str, Any] | None = None,
+    provider_sort: str | None = None,
+    request_timeout: float | None = None,
+    max_retries: int = 2,
 ) -> ChatOpenAI:
     configured = model or os.getenv("OPENROUTER_MODEL") or "openai/gpt-4o-mini"
     model_name = configured.replace("openrouter/", "")
@@ -26,9 +29,18 @@ def create_openrouter_llm(
             "HTTP-Referer": "https://github.com/htooayelwinict/attalang",
             "X-Title": app_title,
         },
+        "request_timeout": request_timeout or float(
+            os.getenv("OPENROUTER_REQUEST_TIMEOUT", "120")
+        ),
+        "max_retries": max_retries,
     }
 
-    if extra_body:
-        config["extra_body"] = extra_body
+    # Merge provider_sort into extra_body for OpenRouter routing
+    body = extra_body.copy() if extra_body else {}
+    if provider_sort:
+        body.setdefault("provider", {})["sort"] = provider_sort
+
+    if body:
+        config["extra_body"] = body
 
     return ChatOpenAI(**config)

@@ -90,6 +90,7 @@ class DockerAgent:
         enable_hitl: bool = False,
         dangerous_tools: tuple[str, ...] | None = None,
         auto_reject_tools: tuple[str, ...] | None = None,
+        provider_sort: str | None = None,
     ):
         if isinstance(model, BaseChatModel):
             self._model = model
@@ -98,6 +99,7 @@ class DockerAgent:
                 model=model,
                 temperature=temperature,
                 app_title=app_title,
+                provider_sort=provider_sort,
             )
 
         self._tools = list(tools) if tools is not None else list(ALL_DOCKER_TOOLS)
@@ -296,6 +298,7 @@ def create_docker_agent(
     enable_hitl: bool = False,
     dangerous_tools: tuple[str, ...] | None = None,
     auto_reject_tools: tuple[str, ...] | None = None,
+    provider_sort: str | None = None,
 ) -> DockerAgent:
     return DockerAgent(
         model=model,
@@ -308,4 +311,5 @@ def create_docker_agent(
         enable_hitl=enable_hitl,
         dangerous_tools=dangerous_tools,
         auto_reject_tools=auto_reject_tools,
+        provider_sort=provider_sort,
     )

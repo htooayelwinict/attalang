@@ -1,18 +1,11 @@
 from typing import cast
 
-import pytest
-from pydantic import ValidationError
+from langchain_core.callbacks import BaseCallbackHandler
 
 from src.multi_agent.agents import DockerAgent
 from src.multi_agent.runtime import runtime as runtime_module
-from src.multi_agent.runtime.nodes import (
-    CoordinatorDockerNode,
-    DockerWorkerNode,
-    FinalizeNode,
-    RouterNode,
-)
+from src.multi_agent.runtime.nodes import CoordinatorDockerNode, DockerWorkerNode, FinalizeNode
 from src.multi_agent.runtime.runtime import DockerGraphRuntime
-from src.multi_agent.runtime.states import CoordinatorState
 
 
 class StubWorker:
@@ -21,7 +14,7 @@ class StubWorker:
         self.exc = exc
         self.calls: list[tuple[str, str | None]] = []
 
-    def invoke(self, message: str, thread_id: str | None = None) -> str:
+    def invoke(self, message: str, thread_id: str | None = None, callbacks: list | None = None) -> str:
         self.calls.append((message, thread_id))
         if self.exc is not None:
             raise self.exc
@@ -32,7 +25,6 @@ def _build_runtime(worker: StubWorker) -> DockerGraphRuntime:
     docker_node = DockerWorkerNode(worker=cast(DockerAgent, worker))
     runtime = DockerGraphRuntime(
         docker_node=docker_node,
-        router_node=RouterNode(),
         coordinator_docker_node=CoordinatorDockerNode(docker_node=docker_node),
         finalize_node=FinalizeNode(),
         graph=None,
@@ -80,43 +72,53 @@ def test_runtime_handles_worker_exception() -> None:
     assert "boom" in output
 
 
-def test_graph_compiles_with_expected_entry_behavior(monkeypatch) -> None:
-    worker = StubWorker(response="compiled-ok")
+def test_create_uses_factory(monkeypatch) -> None:
+    worker = StubWorker(response="factory-ok")
     monkeypatch.setattr(runtime_module, "create_docker_agent", lambda **_: worker)
 
     runtime = runtime_module.DockerGraphRuntime.create(model=None, temperature=0.0)
 
-    assert runtime.graph.__class__.__name__ == "CompiledStateGraph"
-    assert runtime.run_turn("hello", thread_id="thread-create") == "compiled-ok"
+    assert isinstance(runtime, DockerGraphRuntime)
+    assert runtime.run_turn("hello", thread_id="thread-create") == "factory-ok"
 
 
-def test_coordinator_state_rejects_extra_fields() -> None:
-    with pytest.raises(ValidationError):
-        CoordinatorState(user_input="test", unknown_field="value")
+def test_callbacks_forwarded_to_agent() -> None:
+    class Recorder:
+        def __init__(self):
+            self.received_callbacks = None
+
+        def invoke(self, message, thread_id=None, callbacks=None):
+            self.received_callbacks = callbacks
+            return "cb-ok"
+
+    recorder = Recorder()
+    runtime = _build_runtime(cast(StubWorker, recorder))
+    cb = BaseCallbackHandler()
+    runtime.run_turn("test", thread_id="t", callbacks=[cb])
+    assert recorder.received_callbacks == [cb]
 
 
-def test_coordinator_state_optional_fields_default_to_none() -> None:
-    state = CoordinatorState()
-    assert state.origin is None
-    assert state.user_input is None
-    assert state.route is None
+def test_runtime_resets_error_state_for_same_thread() -> None:
+    class FailThenSucceed:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str | None]] = []
+            self._count = 0
 
+        def invoke(
+            self, message: str, thread_id: str | None = None, callbacks: list | None = None
+        ) -> str:
+            self.calls.append((message, thread_id))
+            self._count += 1
+            if self._count == 1:
+                raise RuntimeError("boom")
+            return "ok-after-error"
 
-def test_coordinator_state_model_dump_serializes_values() -> None:
-    state = CoordinatorState(user_input="test", route="docker")
-    data = state.model_dump()
-    assert data["user_input"] == "test"
-    assert data["route"] == "docker"
+    worker = FailThenSucceed()
+    runtime = _build_runtime(cast(StubWorker, worker))
 
+    first = runtime.run_turn("first", thread_id="thread-1")
+    second = runtime.run_turn("second", thread_id="thread-1")
 
-def test_graph_invoke_returns_mapping() -> None:
-    worker = StubWorker(response="mapping-ok")
-    runtime = _build_runtime(worker)
-
-    result = runtime.graph.invoke(
-        CoordinatorState(origin="cli", user_input="hello", thread_id="thread-map"),
-        config={"recursion_limit": 200, "configurable": {"thread_id": "thread-map"}},
-    )
-
-    assert isinstance(result, dict)
-    assert result.get("final_response", "") == "mapping-ok"
+    assert first.startswith("Docker worker error:")
+    assert second == "ok-after-error"
+    assert worker.calls == [("first", "thread-1"), ("second", "thread-1")]

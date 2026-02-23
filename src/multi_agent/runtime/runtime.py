@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -6,19 +6,16 @@ from langgraph.graph import END, START, StateGraph
 
 from src.multi_agent.agents import create_docker_agent
 
-from .docker_trajectory import DockerTrajectoryCallback
-from .nodes import CoordinatorDockerNode, DockerWorkerNode, FinalizeNode, RouterNode
+from .nodes import CoordinatorDockerNode, DockerWorkerNode, FinalizeNode
 from .states import CoordinatorState
 
 
 @dataclass
 class DockerGraphRuntime:
     docker_node: DockerWorkerNode
-    router_node: RouterNode
     coordinator_docker_node: CoordinatorDockerNode
     finalize_node: FinalizeNode
     graph: Any
-    trajectory_callback: DockerTrajectoryCallback = field(default_factory=DockerTrajectoryCallback)
 
     @classmethod
     def create(
@@ -29,9 +26,8 @@ class DockerGraphRuntime:
         skills_dir: str | None = None,
         app_title: str = "MultiAgentDocker",
         enable_hitl: bool = False,
+        provider_sort: str | None = None,
     ) -> "DockerGraphRuntime":
-        trajectory_callback = DockerTrajectoryCallback(max_retries=3)
-
         worker = create_docker_agent(
             model=model,
             temperature=temperature,
@@ -39,75 +35,65 @@ class DockerGraphRuntime:
             skills_dir=skills_dir,
             app_title=app_title,
             enable_hitl=enable_hitl,
+            provider_sort=provider_sort,
         )
-        docker_node = DockerWorkerNode(worker=worker, trajectory_callback=trajectory_callback)
-        router_node = RouterNode()
+        docker_node = DockerWorkerNode(worker=worker)
         coordinator_docker_node = CoordinatorDockerNode(docker_node=docker_node)
         finalize_node = FinalizeNode()
 
         runtime = cls(
             docker_node=docker_node,
-            router_node=router_node,
             coordinator_docker_node=coordinator_docker_node,
             finalize_node=finalize_node,
             graph=None,
-            trajectory_callback=trajectory_callback,
         )
         runtime.graph = runtime._build_graph()
         return runtime
 
-    def _route_after_router(self, state: CoordinatorState) -> str:
+    def _route_from_start(self, state: CoordinatorState) -> str:
         if state.error:
             return "finalize_response"
-        if state.route == "docker":
-            return "run_docker"
-        return "finalize_response"
-
-    def _route_after_docker(self, state: CoordinatorState) -> str:
-        """Route after docker execution - handle replan or finalize."""
-        # If docker_request is set with LOOP DETECTED, it's a replan request
-        if state.docker_request and "LOOP DETECTED" in state.docker_request:
-            return "run_docker"  # Re-route to docker node with replan prompt
-        if state.error:
-            return "finalize_response"
-        return "finalize_response"
+        return "docker_v1_node"
 
     def _build_graph(self):
         builder = StateGraph(CoordinatorState)
-        builder.add_node("route_request", self.router_node.invoke)
-        builder.add_node("run_docker", self.coordinator_docker_node.invoke)
+        builder.add_node("docker_v1_node", self.coordinator_docker_node.invoke)
         builder.add_node("finalize_response", self.finalize_node.invoke)
 
-        builder.add_edge(START, "route_request")
         builder.add_conditional_edges(
-            "route_request",
-            self._route_after_router,
+            START,
+            self._route_from_start,
             {
-                "run_docker": "run_docker",
+                "docker_v1_node": "docker_v1_node",
                 "finalize_response": "finalize_response",
             },
         )
-        builder.add_conditional_edges(
-            "run_docker",
-            self._route_after_docker,
-            {
-                "run_docker": "run_docker",  # Replan loop
-                "finalize_response": "finalize_response",
-            },
-        )
+        builder.add_edge("docker_v1_node", "finalize_response")
         builder.add_edge("finalize_response", END)
         return builder.compile(checkpointer=MemorySaver())
 
-    def run_turn(self, user_input: str, thread_id: str) -> str:
+    def run_turn(self, user_input: str, thread_id: str, callbacks: list[Any] | None = None) -> str:
+        normalized_input = user_input.strip()
+        empty_input_error = "Empty input." if not normalized_input else None
         initial_state = CoordinatorState(
             origin="cli",
             user_input=user_input,
+            route=None,
+            docker_request=normalized_input or None,
+            docker_response=None,
+            final_response=None,
             thread_id=thread_id,
+            error=empty_input_error,
         )
-        result = self.graph.invoke(
-            initial_state,
-            config={"recursion_limit": 200, "configurable": {"thread_id": thread_id}},
-        )
+        config: dict[str, Any] = {"recursion_limit": 200, "configurable": {"thread_id": thread_id}}
+
+        if callbacks:
+            config["callbacks"] = callbacks
+            self.docker_node.verbose_callbacks = callbacks
+        else:
+            self.docker_node.verbose_callbacks = None
+
+        result = self.graph.invoke(initial_state, config=config)
         return result.get("final_response", "") or ""
 
 
@@ -118,6 +104,7 @@ def create_docker_graph_runtime(
     skills_dir: str | None = None,
     app_title: str = "MultiAgentDocker",
     enable_hitl: bool = False,
+    provider_sort: str | None = None,
 ) -> DockerGraphRuntime:
     return DockerGraphRuntime.create(
         model=model,
@@ -126,4 +113,5 @@ def create_docker_graph_runtime(
         skills_dir=skills_dir,
         app_title=app_title,
         enable_hitl=enable_hitl,
+        provider_sort=provider_sort,
     )
