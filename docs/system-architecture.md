@@ -39,7 +39,7 @@ AttaLang provides two parallel single-agent implementations for Docker managemen
 
 ### Request Flow with HITL
 ```
-User Prompt → CLI (--hitl) → DockerRuntime → DockerAgent
+User Prompt → CLI (--hitl) → DockerGraphRuntime → DockerAgent
                                             ↓
                                    Parse prompt with LLM
                                             ↓
@@ -67,15 +67,46 @@ User Prompt → CLI (--hitl) → DockerRuntime → DockerAgent
                                               Return result via MemorySaver
 ```
 
+### Graph Flow
+```
+                    ┌─────────────────────────────────────────────────────────────────┐
+                    │                    LangGraph StateGraph Flow                    │
+                    └─────────────────────────────────────────────────────────────────┘
+
+     START
+       │
+       │ _route_from_start() [error check]
+       │
+       ├─── error ──────────────────────────────────────┐
+       │                                               │
+       │ (no error)                                     ▼
+       ▼                                    ┌──────────────────────┐
+ ┌─────────────────────┐                     │  finalize_response   │
+ │   docker_v1_node    │  (CoordinatorDockerNode)  │  (FinalizeNode)      │
+ │  - Execute task     │  → DockerWorkerNode    │  - Return response   │
+ │  - Call Docker SDK  │                        └──────────┬───────────┘
+ └────────┬────────────┘                                   │
+          │                                                │
+          │ (always)                                       │
+          └────────────────────────────────────────────────┤
+                                                          ▼
+                                                       END
+```
+
 ### Key Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
 | `DockerAgent` | `agents/docker_agent.py` | Agent with HITL support |
-| `DockerRuntime` | `runtime/runtime.py` | Runtime wrapper |
+| `DockerGraphRuntime` | `runtime/runtime.py` | LangGraph runtime wrapper |
+| `DockerWorkerNode` | `runtime/nodes.py` | Invokes Docker agent |
+| `CoordinatorDockerNode` | `runtime/nodes.py` | Coordinates state flow |
+| `FinalizeNode` | `runtime/nodes.py` | Returns final response |
 | `docker_tools.py` | `tools/docker_tools.py` | 40+ Docker SDK wrappers |
+| `VerboseCallback` | `runtime/verbose_callback.py` | Real-time tool output |
 | `create_openrouter_llm` | `utils/llm.py` | OpenRouter LLM factory |
 | `MemorySaver` | langgraph | Checkpointer for state |
+| `TrajectoryCollector` | `trajectory/collector.py` | Optional trajectory tracking |
 
 ### HITL Configuration
 
@@ -115,6 +146,31 @@ agent = create_deep_agent(
     checkpointer=checkpointer,
     interrupt_on=interrupt_on,  # Enable HITL
 )
+```
+
+### Simplified Graph Flow (2025-02-24)
+
+The V1 runtime was simplified to remove loop detection and replan logic:
+
+**Removed:**
+- `RouterNode` (input parsing moved to `run_turn()`)
+- Loop detection and `DockerLoopException`
+- Replan attempts and trajectory callback
+
+**Current Flow:**
+```
+START → docker_v1_node → finalize_response → END
+```
+
+**State Transformation:**
+```
+CoordinatorState               DockerWorkerState
+├── user_input          →      ├── request (from docker_request)
+├── docker_request      →      ├── thread_id
+├── docker_response     ←      ├── response
+├── final_response      ←      └── error
+├── error               ←
+└── thread_id           ─────────────────────────────────▶
 ```
 
 ### HITL Interrupt Handling
