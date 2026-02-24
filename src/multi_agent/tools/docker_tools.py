@@ -190,9 +190,17 @@ def _validate_docker_command(args: list[str]) -> None:
     if not args:
         raise ValueError("Docker command is required")
 
+    _BLOCKED_MARKERS = (";", "&&", "||", "|", "`", "$(")
     for token in args:
-        if any(marker in token for marker in (";", "&&", "||", "|", "`", "$(")):
-            raise ValueError("Shell control operators are not allowed")
+        for marker in _BLOCKED_MARKERS:
+            if marker in token:
+                raise ValueError(
+                    f"Shell control operators are not allowed. "
+                    f"Found '{marker}' in arg: '{token[:80]}'. "
+                    f"Do NOT use shell syntax in docker_cli args. "
+                    f"For arithmetic, compute in Python. "
+                    f"For chaining, use separate docker_cli calls."
+                )
 
     key = _extract_command_key(args)
     if key not in SAFE_DOCKER_COMMANDS:

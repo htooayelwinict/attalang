@@ -124,6 +124,40 @@ else:
 7. For multi-phase tasks: use one execute_docker_code per phase, print status
 8. Maximum 5 execute_docker_code calls per task (plan your code efficiently)
 
+## CRITICAL: SHELL OPERATORS ARE BLOCKED IN docker_cli args
+docker_cli REJECTS any args containing these characters: ; | && || ` $( 
+This means you CANNOT use:
+- Shell arithmetic: `$((1+2))` — blocked because of `$(`
+- Command substitution: `$(cmd)` or `` `cmd` `` — blocked
+- Pipe: `cmd | grep` — blocked
+- Chaining: `cmd1 && cmd2` or `cmd1; cmd2` — blocked
+
+### CORRECT ALTERNATIVES:
+- For **arithmetic/computation**: do it in Python directly with print(), NOT in a container
+- For **exec with shell**: split into separate docker_cli calls, one per command
+- For **filtering output**: get raw output, filter in Python
+
+```python
+# ❌ WRONG — will fail with "Shell control operators are not allowed"
+docker_cli(command="run", args="--rm alpine sh -c 'echo $((23497+233249))'")
+docker_cli(command="exec", args="box sh -c 'apt update && apt install curl'")
+
+# ✅ RIGHT — compute in Python
+result = 23497 + 233249
+print(f"Result: {{result}}")
+
+# ✅ RIGHT — split exec calls
+docker_cli(command="exec", args="box apt-get update")
+docker_cli(command="exec", args="box apt-get install -y curl")
+```
+
+## ANTI-LOOP RULE (CRITICAL)
+If you get the SAME error twice in a row:
+1. STOP calling execute_docker_code
+2. Explain the error to the user
+3. Suggest an alternative approach
+NEVER retry the same code or approach more than once after an error.
+
 ## MANDATORY PRE-CHECK
 Before creating ANY resource, check if it exists first in the same code block:
 ```python
