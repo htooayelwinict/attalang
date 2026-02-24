@@ -44,9 +44,19 @@ htmlcov/
 *.tmp
 .DS_Store
 sample-srcs/
+.trajectories/
+
+# Security - Prevent secret leaks
+admin/benchmark_*.py
+**/*token*.py
+**/*apikey*.py
+**/*api_key*.py
+tests/test_token_reduction.py
 
 # Claude
 .claude
 CLAUDE.md
 # Environment
 .env
+.env.local
+.env.*.local
