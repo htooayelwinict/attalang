@@ -2,11 +2,12 @@
 
 ## Project Summary
 
-**AttaLang** is a Docker management agent framework providing two parallel implementations:
-- **V1 (LangChain)**: Single agent using LangChain DeepAgents with direct tool access
+**AttaLang** is a Docker management agent framework providing three parallel implementations:
+- **V1 (LangChain)**: Single agent using LangChain DeepAgents with direct tool access + HITL security
 - **V2 (Pydantic)**: Single agent using Pydantic-DeepAgents with prefixed tools
+- **V3 (Programmatic)**: Token-efficient agent that writes Python code to call Docker tools directly
 
-Both versions provide natural language control over Docker operations including containers, images, networks, volumes, and compose stacks.
+All versions provide natural language control over Docker operations including containers, images, networks, volumes, and compose stacks.
 
 ## Product Development Requirements (PDR)
 
@@ -24,16 +25,18 @@ Both versions provide natural language control over Docker operations including 
 | US-003 | Admin | Monitor container stats | Track resource usage |
 
 ### Features
-| Feature | Status | Priority |
-|---------|--------|----------|
-| Container CRUD | Done | High |
-| Image management | Done | High |
-| Network management | Done | Medium |
-| Volume management | Done | Medium |
-| Compose support | Done | Medium |
-| Planning/Todo | Done (V2) | High |
-| Verbose mode | Done (V2) | Medium |
-| LangSmith tracing | V1 only | Low |
+| Feature | V1 | V2 | V3 | Priority |
+|---------|----|----|----|----------|
+| Container CRUD | ✅ | ✅ | ✅ | High |
+| Image management | ✅ | ✅ | ✅ | High |
+| Network management | ✅ | ✅ | ✅ | Medium |
+| Volume management | ✅ | ✅ | ✅ | Medium |
+| Compose support | ✅ | ✅ | ✅ | Medium |
+| HITL Security | ✅ | ❌ | ⚠️ | High |
+| Token efficiency | Normal | Normal | **High** | High |
+| Loop detection | ❌ | ❌ | ✅ | Medium |
+| Trajectory tracking | ✅ | ❌ | ✅ | Low |
+| Verbose mode | ✅ | ✅ | ✅ | Medium |
 
 ### Success Metrics
 - Tool call accuracy: 95%+
@@ -42,13 +45,15 @@ Both versions provide natural language control over Docker operations including 
 
 ## Tech Stack
 
-| Layer | V1 (LangChain) | V2 (Pydantic) |
-|-------|-----------------|---------------|
-| Framework | LangChain DeepAgents | Pydantic-DeepAgents |
-| LLM | OpenRouter (LangChain) | OpenRouter (Pydantic-AI) |
-| Tools | Docker SDK (direct) | Docker SDK (prefixed) |
-| State | MemorySaver checkpointer | Thread-based deps |
-| Planning | Built-in todos | docker_create_plan tool |
+| Layer | V1 (LangChain) | V2 (Pydantic) | V3 (Programmatic) |
+|-------|-----------------|---------------|-------------------|
+| Framework | LangChain DeepAgents | Pydantic-DeepAgents | LangChain DeepAgents |
+| Tool calling | Direct (N round-trips) | Prefixed | **Code execution** |
+| LLM | OpenRouter | OpenRouter | OpenRouter |
+| Tools | Docker SDK (direct) | Docker SDK (prefixed) | **Python bridge** |
+| State | MemorySaver | Thread deps | MemorySaver |
+| Security | HITL + auto-reject | - | Shell operator blocking |
+| Research | Loop detection | - | Loop detection + trajectory |
 
 ## Getting Started
 
@@ -61,9 +66,12 @@ python3 -m venv .venv
 cp .env.example .env
 # Add OPENROUTER_API_KEY to .env
 
-# Run V1 (LangGraph)
-.venv/bin/python -m src.multi_agent.runtime.cli
+# Run V1 (LangGraph) - with HITL security
+.venv/bin/python -m src.multi_agent.runtime.cli --hitl
 
 # Run V2 (Pydantic)
 .venv/bin/python -m src.multi_agent_v2.runtime.cli_v2 -v
+
+# Run V3 (Programmatic) - token efficient
+.venv/bin/python -m src.multi_agent_v3.runtime.cli_v3 -v
 ```

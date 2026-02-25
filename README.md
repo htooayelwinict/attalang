@@ -1,6 +1,6 @@
 # AttaLang
 
-Docker management agent with natural language interface and HITL security. Two parallel implementations using LangGraph and Pydantic-DeepAgents.
+Docker management agent with natural language interface. Three implementations: V1 (HITL security), V2 (Pydantic), V3 (programmatic code execution).
 
 ## Quick Start
 
@@ -20,6 +20,9 @@ cp .env.example .env
 
 # Run V2 (Pydantic) - verbose mode
 .venv/bin/python -m src.multi_agent_v2.runtime.cli_v2 -v
+
+# Run V3 (Programmatic) - token efficient + trajectory tracking
+.venv/bin/python -m src.multi_agent_v3.runtime.cli_v3 -v
 ```
 
 ## Examples
@@ -48,11 +51,15 @@ multi-agent-cli --prompt "list containers"  # Single-shot
 # V2 (Pydantic)
 multi-agent-cli-v2 -v                       # Verbose (shows tool calls)
 multi-agent-cli-v2 --prompt "..."           # Single-shot
+
+# V3 (Programmatic) - token efficient
+multi-agent-cli-v3 -v                       # Verbose + trajectory tracking
+multi-agent-cli-v3 --prompt "..."           # Single-shot
 ```
 
-## HITL Security (V1)
+## Security
 
-Human-in-the-Loop security controls for dangerous Docker operations:
+### V1: HITL (Human-in-the-Loop)
 
 | Category | Tools | Behavior |
 |----------|-------|----------|
@@ -70,6 +77,19 @@ multi-agent-cli --hitl
 Operation remove_volume is not allowed.
 ```
 
+### V3: Shell Operator Blocking
+
+Blocks shell control operators in docker_cli args: `; | && || ` $(`
+
+```bash
+# Blocked
+docker_cli(command="run", args="alpine sh -c 'cmd1 && cmd2'")
+
+# Allowed - separate calls
+docker_cli(command="exec", args="box cmd1")
+docker_cli(command="exec", args="box cmd2")
+```
+
 ## Documentation
 
 | Doc | Description |
@@ -82,13 +102,13 @@ Operation remove_volume is not allowed.
 
 ## Tech Stack
 
-| Component | V1 (LangChain) | V2 (Pydantic) |
-|-----------|----------------|---------------|
-| Framework | LangChain DeepAgents | Pydantic-DeepAgents |
-| LLM | OpenRouter | OpenRouter |
-| Tools | Docker SDK (direct) | Docker SDK (prefixed) |
-| Security | HITL + auto-reject | - |
-| Planning | Built-in todos | docker_create_plan |
+| Component | V1 (LangChain) | V2 (Pydantic) | V3 (Programmatic) |
+|-----------|----------------|---------------|-------------------|
+| Framework | LangChain | Pydantic-AI | LangChain |
+| Tool calling | Direct (N round-trips) | Prefixed (N round-trips) | **Code execution (1 script)** |
+| Token efficiency | Normal | Normal | **High** |
+| Security | HITL + auto-reject | - | Shell operator blocking |
+| Research | - | - | Loop detection + trajectory |
 
 ## Development
 

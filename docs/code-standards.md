@@ -14,6 +14,7 @@
 |-----------|---------|
 | `src/multi_agent/` | V1 LangGraph implementation |
 | `src/multi_agent_v2/` | V2 Pydantic implementation |
+| `src/multi_agent_v3/` | V3 Programmatic (code execution) |
 | `src/skills/` | Agent skill definitions (SKILL.md) |
 | `tests/` | Pytest test files |
 
@@ -66,6 +67,29 @@ def _wrap_tool_for_context(fn: Any) -> Any:
     return wrapper
 ```
 
+## V3 Programmatic Pattern
+
+V3 uses code execution instead of direct tool calls:
+
+```python
+# LLM generates Python code
+code = '''
+result = docker_cli(command="ps", args="-a")
+print(result)
+'''
+
+# CodeExecutor runs it in restricted sandbox
+executor = CodeExecutor(tool_namespace=bridge.make_namespace())
+output = executor.execute(code)
+```
+
+**Rules:**
+- Always use keyword arguments: `docker_cli(command="ps", args="-a")`
+- Use `print()` to see results - only printed output is returned
+- Shell operators blocked: `; | && || ` $(`
+- Available imports: json, re, time, textwrap, itertools, functools, collections
+- No file I/O, no subprocess, no network calls
+
 ## Testing
 
 ```bash
@@ -111,6 +135,9 @@ def main(model: str | None, verbose: bool) -> None:
 | `OPENROUTER_API_KEY` | Yes | - |
 | `OPENROUTER_MODEL` | No | `openai/gpt-4o-mini` |
 | `MULTI_AGENT_DOCKER_WORKSPACE` | No | `/tmp/multi-agent-docker-workspace` |
+| `MULTI_AGENT_DOCKER_V2_WORKSPACE` | No | `/tmp/multi-agent-docker-v2-workspace` |
+| `PROGRAMMATIC_TIMEOUT_SECONDS` | No | `120` |
+| `PROGRAMMATIC_MAX_OUTPUT_CHARS` | No | `8000` |
 
 ## Security Patterns
 
@@ -118,3 +145,4 @@ def main(model: str | None, verbose: bool) -> None:
 - Docker tools use `docker.from_env()` - no host execution
 - Skills loaded into virtual filesystem
 - Workspace isolation per thread
+- **V3**: Shell operators blocked in docker_cli args (`; | && || ` $( `)

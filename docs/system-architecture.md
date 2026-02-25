@@ -2,7 +2,13 @@
 
 ## Overview
 
-AttaLang provides two parallel single-agent implementations for Docker management with Human-in-the-Loop (HITL) security controls:
+AttaLang provides three parallel single-agent implementations for Docker management:
+
+| Version | Approach | Token Efficiency | Security |
+|---------|----------|------------------|----------|
+| **V1** | Direct tool calling (N round-trips) | Normal | HITL + auto-reject |
+| **V2** | Prefixed tool calling (N round-trips) | Normal | - |
+| **V3** | **Code execution (1 Python script)** | **High** | Shell operator blocking |
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -237,26 +243,59 @@ agent.iter() → UserPromptNode → ModelRequestNode → CallToolsNode → End
 
 ## Comparison
 
-| Aspect | V1 (LangChain) | V2 (Pydantic) |
-|--------|----------------|---------------|
-| Architecture | Single agent + HITL | Single agent |
-| Tool access | Direct list | Prefixed toolset |
-| Tool prefix | None | `docker_` |
-| Planning | Built-in todos | docker_create_plan |
-| Verbose mode | LangSmith tracing | -v flag |
-| HITL Security | ✅ interrupt_on + auto-reject | ❌ Not implemented |
-| State | MemorySaver | Thread deps |
-| Dependencies | langchain, langgraph | pydantic-deep |
+| Aspect | V1 (LangChain) | V2 (Pydantic) | V3 (Programmatic) |
+|--------|----------------|---------------|-------------------|
+| Architecture | Single agent + HITL | Single agent | Code generation |
+| Tool access | Direct list | Prefixed toolset | Python functions |
+| Tool calls | N round-trips | N round-trips | **1 execution** |
+| Tool prefix | None | `docker_` | N/A (functions) |
+| Planning | Built-in todos | docker_create_plan | Built-in (in code) |
+| Verbose mode | LangSmith tracing | -v flag | -v flag |
+| HITL Security | ✅ interrupt_on | ❌ | ⚠️ Shell blocking |
+| Token efficiency | Normal | Normal | **High (60-80% reduction)** |
+| Loop detection | ❌ | ❌ | ✅ |
+| Trajectory | Optional | ❌ | Built-in |
+| State | MemorySaver | Thread deps | MemorySaver |
+| Dependencies | langchain, langgraph | pydantic-deep | langchain, langgraph |
 
-## Security (V1 HITL)
+## Security
 
-### Tool Categories
+### V1: HITL (Human-in-the-Loop)
+
+#### Tool Categories
 
 | Category | Tools | Behavior |
 |----------|-------|----------|
 | Safe | list_*, inspect_*, stats, logs | Execute directly |
 | Dangerous | remove_image, prune_images | Prompt user: "⚠️ Approve?" |
 | Blocked | remove_volume, prune_*, system_prune | Auto-reject: "🚫 BLOCKED" |
+
+### V3: Shell Operator Blocking
+
+V3 blocks shell control operators in `docker_cli()` arguments:
+
+```
+Blocked characters: ; | && || ` $(
+```
+
+**Examples:**
+```python
+# ❌ BLOCKED - shell operators
+docker_cli(command="run", args="alpine sh -c 'apt update && apt install curl'")
+
+# ✅ ALLOWED - split into separate calls
+docker_cli(command="exec", args="box apt-get update")
+docker_cli(command="exec", args="box apt-get install -y curl")
+```
+
+### Usage
+```bash
+# V1 - Enable HITL security
+multi-agent-cli --hitl
+
+# V3 - Shell blocking is automatic
+multi-agent-cli-v3
+```
 
 ### Usage
 ```bash
@@ -302,5 +341,6 @@ Approve? [y/n]:
 |---------|-----------------|
 | V1 | MemorySaver checkpointer with thread_id |
 | V2 | `deps_by_thread` dict per thread_id |
+| V3 | MemorySaver checkpointer with thread_id |
 
-Each thread has isolated workspace and todo state.
+Each thread has isolated workspace and trajectory state.
