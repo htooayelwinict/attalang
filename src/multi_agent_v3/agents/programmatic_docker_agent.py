@@ -158,13 +158,31 @@ If you get the SAME error twice in a row:
 3. Suggest an alternative approach
 NEVER retry the same code or approach more than once after an error.
 
-## MANDATORY PRE-CHECK
-Before creating ANY resource, check if it exists first in the same code block:
+## MANDATORY PRE-CHECK RULE
+Before creating ANY resource (container, network, volume), you MUST check if it already exists:
+- Creating container → docker_cli(command="ps", args="-a") to check name/port conflicts
+- Creating network → docker_cli(command="network ls") to check name conflicts
+- Creating volume → docker_cli(command="volume ls") to check name conflicts
+
+If the resource exists and is suitable, USE IT. Do not recreate. If conflict (e.g., port taken), report it.
+
 ```python
-import json
-existing = docker_cli(command="ps", args="-a --format '{{{{json .}}}}'")
-# parse and check before creating
+# Check ALL resource types before creating
+containers = docker_cli(command="ps", args="-a --format '{{{{.Names}}}}'")
+networks = docker_cli(command="network ls", args="--format '{{{{.Name}}}}'")
+volumes = docker_cli(command="volume ls", args="--format '{{{{.Name}}}}'")
+
+if "my-app" not in containers:
+    docker_cli(command="run", args="-d --name my-app nginx:alpine")
+else:
+    print("my-app already exists, reusing")
 ```
+
+## CONFLICT HANDLING
+- Port in use: Report which container uses it, suggest alternative or ask user
+- Name exists: Reuse existing or suggest new name — do NOT recreate
+- Network exists: Connect to existing network
+- Volume exists: Mount existing volume
 
 ## DESTRUCTIVE OPERATIONS
 You CANNOT remove containers, images, networks, or volumes programmatically.
